@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,8 +7,9 @@
 #pragma once
 
 #include <stdbool.h>
+#include "esp_attr.h"
 #include "soc/soc.h"
-#include "soc/system_reg.h"
+#include "soc/system_struct.h"
 #include "soc/usb_wrap_struct.h"
 #include "soc/rtc_cntl_struct.h"
 #include "soc/usb_serial_jtag_struct.h"
@@ -24,7 +25,6 @@ extern "C" {
  */
 static inline void usb_phy_ll_int_otg_enable(usb_wrap_dev_t *hw)
 {
-    hw->otg_conf.pad_enable = 1;
     // USB_OTG use internal PHY
     hw->otg_conf.phy_sel = 0;
     // phy_sel is controlled by the following register value
@@ -59,6 +59,8 @@ static inline void usb_phy_ll_int_jtag_enable(usb_serial_jtag_dev_t *hw)
     hw->conf0.phy_sel = 0;
     // Disable software control USB D+ D- pullup pulldown (Device FS: dp_pullup = 1)
     hw->conf0.pad_pull_override = 0;
+    // Enable USB D+ pullup
+    hw->conf0.dp_pullup = 1;
     // Enable USB pad function
     hw->conf0.usb_pad_enable = 1;
     // phy_sel is controlled by the following register value
@@ -103,6 +105,16 @@ static inline void usb_phy_ll_int_load_conf(usb_wrap_dev_t *hw, bool dp_pu, bool
 }
 
 /**
+ * @brief Enable the internal PHY control to D+/D- pad
+ * @param hw     Start address of the USB Wrap registers
+ * @param pad_en Enable the PHY control to D+/D- pad
+ */
+static inline void usb_phy_ll_usb_wrap_pad_enable(usb_wrap_dev_t *hw, bool pad_en)
+{
+    hw->otg_conf.pad_enable = pad_en;
+}
+
+/**
  * @brief Enable the internal PHY's test mode
  *
  * @param hw Start address of the USB Wrap registers
@@ -120,6 +132,24 @@ static inline void usb_phy_ll_int_enable_test_mode(usb_wrap_dev_t *hw, bool en)
     } else {
         hw->test_conf.test_enable = 0;
     }
+}
+
+/**
+ * Enable the bus clock for USB Wrap module
+ * @param clk_en True if enable the clock of USB Wrap module
+ */
+FORCE_INLINE_ATTR void usb_phy_ll_usb_wrap_enable_bus_clock(bool clk_en)
+{
+    SYSTEM.perip_clk_en0.usb_clk_en = clk_en;
+}
+
+/**
+ * @brief Reset the USB Wrap module
+ */
+FORCE_INLINE_ATTR void usb_phy_ll_usb_wrap_reset_register(void)
+{
+    SYSTEM.perip_rst_en0.usb_rst = 1;
+    SYSTEM.perip_rst_en0.usb_rst = 0;
 }
 
 #ifdef __cplusplus

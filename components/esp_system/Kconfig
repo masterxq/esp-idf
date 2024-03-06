@@ -227,7 +227,6 @@ menu "ESP System Settings"
             depends on (IDF_TARGET_ESP32S2 || IDF_TARGET_ESP32S3)  && !TINY_USB
         config ESP_CONSOLE_USB_SERIAL_JTAG
             bool "USB Serial/JTAG Controller"
-            select ESPTOOLPY_NO_STUB if IDF_TARGET_ESP32S3  #ESPTOOL-251
             select ESPTOOLPY_NO_STUB if IDF_TARGET_ESP32C3  #ESPTOOL-252
             depends on IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3
         config ESP_CONSOLE_UART_CUSTOM
@@ -474,9 +473,9 @@ menu "ESP System Settings"
             is triggered.
 
     config ESP_DEBUG_STUBS_ENABLE
-        bool
+        bool "OpenOCD debug stubs"
         default COMPILER_OPTIMIZATION_LEVEL_DEBUG
-        depends on !ESP32_TRAX && !ESP32S2_TRAX
+        depends on !ESP32_TRAX && !ESP32S2_TRAX && !ESP32S3_TRAX
         help
             Debug stubs are used by OpenOCD to execute pre-compiled onboard code
             which does some useful debugging stuff, e.g. GCOV data dump.
@@ -499,5 +498,14 @@ menu "ESP System Settings"
             help
                 Using level 4 interrupt for Interrupt Watchdog and other system checks.
     endchoice
+
+    config ESP_SYSTEM_BBPLL_RECALIB
+        bool "Re-calibration BBPLL at startup"
+        depends on IDF_TARGET_ESP32S3
+        default y
+        help
+            This configuration helps to address an BBPLL inaccurate issue when boot from certain bootloader version,
+            which may increase about the boot-up time by about 200 us. Disable this when your bootloader is built with
+            ESP-IDF version v5.2 and above.
 
 endmenu  # ESP System Settings

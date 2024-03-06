@@ -165,11 +165,12 @@ void esp_efuse_utility_reset(void)
 }
 
 // Burn values written to the efuse write registers
-void esp_efuse_utility_burn_efuses(void)
+esp_err_t esp_efuse_utility_burn_efuses(void)
 {
     ++s_burn_counter;
-    esp_efuse_utility_burn_chip();
+    esp_err_t err = esp_efuse_utility_burn_chip();
     ++s_burn_counter;
+    return err;
 }
 
 // Erase the virt_blocks array.
@@ -438,7 +439,7 @@ bool esp_efuse_utility_load_efuses_from_flash(void)
     }
     uint32_t efuses_in_flash[sizeof(virt_blocks)];
 
-    esp_err_t err = bootloader_flash_read(esp_efuse_flash_offset, &efuses_in_flash, sizeof(efuses_in_flash), true);
+    esp_err_t err = bootloader_flash_read(esp_efuse_flash_offset, &efuses_in_flash, sizeof(efuses_in_flash), false);
     if (err != ESP_OK) {
         ESP_EARLY_LOGE(TAG, "Can not read eFuse partition from flash (err=0x%x)", err);
         abort();
@@ -474,3 +475,29 @@ void esp_efuse_utility_write_efuses_to_flash(void)
     }
 }
 #endif // CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH
+
+bool esp_efuse_utility_is_correct_written_data(esp_efuse_block_t block, unsigned r_data_len)
+{
+    uint32_t* w_data = (uint32_t*)range_write_addr_blocks[block].start;
+    uint32_t* r_data = (uint32_t*)range_read_addr_blocks[block].start;
+
+    bool correct_written_data = memcmp(w_data, r_data, r_data_len) == 0;
+    if (correct_written_data) {
+        ESP_LOGI(TAG, "BURN BLOCK%d - OK (write block == read block)", block);
+        return true;
+    }
+
+    correct_written_data = true;
+    for (unsigned i = 0; i < r_data_len / 4; i++) {
+        if ((*(r_data + i) & *(w_data + i)) != *(w_data + i)) {
+            correct_written_data = false;
+            break;
+        }
+    }
+    if (correct_written_data) {
+        ESP_LOGI(TAG, "BURN BLOCK%d - OK (all write block bits are set)", block);
+    } else {
+        ESP_LOGE(TAG, "BURN BLOCK%d - ERROR (written bits != read bits)", block);
+    }
+    return correct_written_data;
+}

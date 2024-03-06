@@ -10,6 +10,12 @@
 #include "soc/soc.h"
 #include "soc/soc_caps.h"
 #include "hal/i2s_hal.h"
+#include "sdkconfig.h"
+
+#ifndef SOC_I2S_SUPPORTS_TDM
+#define I2S_HAL_DEFAULT_MSB_RIGHT       (true) // Default msb_right bit to true
+#define I2S_HAL_DEFAULT_RIGHT_FIRST     (I2S_HAL_DEFAULT_MSB_RIGHT) // Normally right_first bit keeps same as msb_right
+#endif  // SOC_I2S_SUPPORTS_TDM
 
 /**
  * @brief Calculate the closest sample rate clock configuration.
@@ -19,7 +25,7 @@
  * @param clk_cfg I2S clock configuration(input)
  * @param cal Point to `i2s_ll_mclk_div_t` structure(output).
  */
-static void i2s_hal_mclk_div_decimal_cal(i2s_hal_clock_cfg_t *clk_cfg, i2s_ll_mclk_div_t *cal)
+void i2s_hal_mclk_div_decimal_cal(i2s_hal_clock_cfg_t *clk_cfg, i2s_ll_mclk_div_t *cal)
 {
     int ma = 0;
     int mb = 0;
@@ -97,7 +103,7 @@ void i2s_hal_init(i2s_hal_context_t *hal, int i2s_num)
 }
 
 #if SOC_I2S_SUPPORTS_PDM_TX
-void i2s_hal_tx_set_pdm_mode_default(i2s_hal_context_t *hal, uint32_t sample_rate)
+void i2s_hal_tx_set_pdm_mode_default(i2s_hal_context_t *hal, uint32_t sample_rate, bool is_mono)
 {
     /* enable pdm tx mode */
     i2s_ll_tx_enable_pdm(hal->dev, true);
@@ -129,11 +135,11 @@ void i2s_hal_tx_set_pdm_mode_default(i2s_hal_context_t *hal, uint32_t sample_rat
     /* set pdm tx high pass filter parameters */
     i2s_ll_tx_set_pdm_hp_filter_param0(hal->dev, 6);
     i2s_ll_tx_set_pdm_hp_filter_param5(hal->dev, 7);
-    /* enable pdm sigma-delta codec */
-    i2s_ll_tx_enable_pdm_sd_codec(hal->dev, true);
+    /* enable pdm sigma-delta dac */
+    i2s_ll_tx_enable_pdm_sd_codec(hal->dev, is_mono);
     /* set pdm tx sigma-delta codec dither */
     i2s_ll_tx_set_pdm_sd_dither(hal->dev, 0);
-    i2s_ll_tx_set_pdm_sd_dither2(hal->dev, 0);
+    i2s_ll_tx_set_pdm_sd_dither2(hal->dev, 1);
 
 #endif // SOC_I2S_SUPPORTS_PDM_CODEC
 }
@@ -172,7 +178,6 @@ void i2s_hal_tx_set_common_mode(i2s_hal_context_t *hal, const i2s_hal_config_t *
     i2s_ll_tx_clk_set_src(hal->dev, I2S_CLK_D2CLK); // Set I2S_CLK_D2CLK as default
     i2s_ll_mclk_use_tx_clk(hal->dev);
 
-    i2s_ll_tx_set_active_chan_mask(hal->dev, hal_cfg->chan_mask);
     // In TDM mode(more than 2 channels), the ws polarity should be high first.
     if (hal_cfg->total_chan > 2) {
         i2s_ll_tx_set_ws_idle_pol(hal->dev, true);
@@ -182,8 +187,12 @@ void i2s_hal_tx_set_common_mode(i2s_hal_context_t *hal, const i2s_hal_config_t *
     i2s_ll_tx_set_bit_order(hal->dev, hal_cfg->bit_order_msb);
     i2s_ll_tx_set_skip_mask(hal->dev, hal_cfg->skip_msk);
 #else
-    i2s_ll_tx_enable_msb_right(hal->dev, false);
-    i2s_ll_tx_enable_right_first(hal->dev, false);
+#if CONFIG_IDF_TARGET_ESP32
+    i2s_ll_tx_enable_msb_right(hal->dev, hal_cfg->sample_bits <= I2S_BITS_PER_SAMPLE_16BIT);
+#else
+    i2s_ll_tx_enable_msb_right(hal->dev, I2S_HAL_DEFAULT_MSB_RIGHT);
+#endif
+    i2s_ll_tx_enable_right_first(hal->dev, I2S_HAL_DEFAULT_RIGHT_FIRST);
     i2s_ll_tx_force_enable_fifo_mod(hal->dev, true);
 #endif
 }
@@ -198,7 +207,6 @@ void i2s_hal_rx_set_common_mode(i2s_hal_context_t *hal, const i2s_hal_config_t *
     i2s_ll_rx_clk_set_src(hal->dev, I2S_CLK_D2CLK); // Set I2S_CLK_D2CLK as default
     i2s_ll_mclk_use_rx_clk(hal->dev);
 
-    i2s_ll_rx_set_active_chan_mask(hal->dev, hal_cfg->chan_mask);
     // In TDM mode(more than 2 channels), the ws polarity should be high first.
     if (hal_cfg->total_chan > 2) {
         i2s_ll_rx_set_ws_idle_pol(hal->dev, true);
@@ -207,8 +215,12 @@ void i2s_hal_rx_set_common_mode(i2s_hal_context_t *hal, const i2s_hal_config_t *
     i2s_ll_rx_enable_big_endian(hal->dev, hal_cfg->big_edin);
     i2s_ll_rx_set_bit_order(hal->dev, hal_cfg->bit_order_msb);
 #else
-    i2s_ll_rx_enable_msb_right(hal->dev, false);
-    i2s_ll_rx_enable_right_first(hal->dev, false);
+#if CONFIG_IDF_TARGET_ESP32
+    i2s_ll_rx_enable_msb_right(hal->dev, hal_cfg->sample_bits <= I2S_BITS_PER_SAMPLE_16BIT);
+#else
+    i2s_ll_rx_enable_msb_right(hal->dev, I2S_HAL_DEFAULT_MSB_RIGHT);
+#endif
+    i2s_ll_rx_enable_right_first(hal->dev, I2S_HAL_DEFAULT_RIGHT_FIRST);
     i2s_ll_rx_force_enable_fifo_mod(hal->dev, true);
 #endif
 }
@@ -232,13 +244,28 @@ void i2s_hal_tx_set_channel_style(i2s_hal_context_t *hal, const i2s_hal_config_t
     uint32_t chan_num = 2;
     uint32_t chan_bits = hal_cfg->chan_bits;
     uint32_t data_bits = hal_cfg->sample_bits;
+#if SOC_I2S_SUPPORTS_TDM
+    bool is_mono = (hal_cfg->chan_fmt == I2S_CHANNEL_FMT_ALL_RIGHT) ||
+                   (hal_cfg->chan_fmt == I2S_CHANNEL_FMT_ALL_LEFT);
+#else
     bool is_mono = (hal_cfg->chan_fmt == I2S_CHANNEL_FMT_ONLY_RIGHT) ||
                    (hal_cfg->chan_fmt == I2S_CHANNEL_FMT_ONLY_LEFT);
+#endif
 
     /* Set channel number and valid data bits */
 #if SOC_I2S_SUPPORTS_TDM
     chan_num = hal_cfg->total_chan;
+    i2s_ll_tx_set_active_chan_mask(hal->dev, hal_cfg->chan_mask >> 16);
     i2s_ll_tx_set_chan_num(hal->dev, chan_num);
+#else
+    i2s_ll_tx_set_chan_mod(hal->dev, hal_cfg->chan_fmt);
+#endif  // SOC_I2S_SUPPORTS_TDM
+#if SOC_I2S_SUPPORTS_PDM_CODEC
+    if (hal_cfg->mode & I2S_MODE_PDM) {
+        // Fixed to 16 while using mono mode and 32 while using stereo mode
+        data_bits = hal_cfg->chan_fmt == I2S_CHANNEL_FMT_RIGHT_LEFT ? 32 : 16;
+        chan_bits = data_bits;
+    }
 #endif
     i2s_ll_tx_set_sample_bit(hal->dev, chan_bits, data_bits);
     i2s_ll_tx_enable_mono_mode(hal->dev, is_mono);
@@ -249,7 +276,13 @@ void i2s_hal_tx_set_channel_style(i2s_hal_context_t *hal, const i2s_hal_config_t
     i2s_ll_tx_enable_msb_shift(hal->dev, shift_en);
     i2s_ll_tx_set_ws_width(hal->dev, ws_width);
 #if SOC_I2S_SUPPORTS_TDM
-    i2s_ll_tx_set_half_sample_bit(hal->dev, chan_num * chan_bits / 2);
+    uint32_t half_sample_bits = chan_num * chan_bits / 2;
+#if SOC_I2S_SUPPORTS_PDM_CODEC
+    if (hal_cfg->mode & I2S_MODE_PDM) {
+        half_sample_bits = 16; // Fixed to 16 in PDM mode
+    }
+#endif
+    i2s_ll_tx_set_half_sample_bit(hal->dev, half_sample_bits);
 #endif
 }
 
@@ -263,8 +296,22 @@ void i2s_hal_rx_set_channel_style(i2s_hal_context_t *hal, const i2s_hal_config_t
 
 #if SOC_I2S_SUPPORTS_TDM
     chan_num = hal_cfg->total_chan;
+    i2s_ll_rx_set_active_chan_mask(hal->dev, hal_cfg->chan_mask >> 16);
     i2s_ll_rx_set_chan_num(hal->dev, chan_num);
-#endif
+#if SOC_I2S_SUPPORTS_PDM_RX
+    is_mono = (hal_cfg->mode & I2S_MODE_PDM) ? false : true;
+#endif  // SOC_I2S_SUPPORTS_PDM_RX
+#else
+    /* rx_chan_mod is related to msb_right, we take it into consideration here.
+     * It is calculated again here instead of reading the value from the register,
+     * so that we can avoid introducing the calling sequence dependency */
+    bool is_msb_right = I2S_HAL_DEFAULT_MSB_RIGHT;  // Set default to false for ESP32-S2
+#if CONFIG_IDF_TARGET_ESP32
+    /* Specially, `msb_right` on esp32 is related to sample bits and PDM mode */
+    is_msb_right |= (hal_cfg->sample_bits <= I2S_BITS_PER_SAMPLE_16BIT) || (hal_cfg->mode & I2S_MODE_PDM);
+#endif  // CONFIG_IDF_TARGET_ESP32
+    i2s_ll_rx_set_chan_mod(hal->dev, hal_cfg->chan_fmt, is_msb_right);
+#endif  // SOC_I2S_SUPPORTS_TDM
     i2s_ll_rx_set_sample_bit(hal->dev, chan_bits, data_bits);
     i2s_ll_rx_enable_mono_mode(hal->dev, is_mono);
 
@@ -306,7 +353,7 @@ void i2s_hal_config_param(i2s_hal_context_t *hal, const i2s_hal_config_t *hal_cf
 #if SOC_I2S_SUPPORTS_PDM_TX
         if (hal_cfg->mode & I2S_MODE_PDM) {
             /* Set tx pdm mode */
-            i2s_hal_tx_set_pdm_mode_default(hal, hal_cfg->sample_rate);
+            i2s_hal_tx_set_pdm_mode_default(hal, hal_cfg->sample_rate, hal_cfg->chan_fmt != I2S_CHANNEL_FMT_RIGHT_LEFT);
         } else
 #endif
         {
@@ -347,32 +394,20 @@ void i2s_hal_config_param(i2s_hal_context_t *hal, const i2s_hal_config_t *hal_cf
 
 void i2s_hal_start_tx(i2s_hal_context_t *hal)
 {
-#if SOC_I2S_SUPPORTS_TDM
-    i2s_ll_tx_enable_clock(hal->dev);
-#endif
     i2s_ll_tx_start(hal->dev);
 }
 
 void i2s_hal_start_rx(i2s_hal_context_t *hal)
 {
-#if SOC_I2S_SUPPORTS_TDM
-    i2s_ll_rx_enable_clock(hal->dev);
-#endif
     i2s_ll_rx_start(hal->dev);
 }
 
 void i2s_hal_stop_tx(i2s_hal_context_t *hal)
 {
     i2s_ll_tx_stop(hal->dev);
-#if SOC_I2S_SUPPORTS_TDM
-    i2s_ll_tx_disable_clock(hal->dev);
-#endif
 }
 
 void i2s_hal_stop_rx(i2s_hal_context_t *hal)
 {
     i2s_ll_rx_stop(hal->dev);
-#if SOC_I2S_SUPPORTS_TDM
-    i2s_ll_rx_disable_clock(hal->dev);
-#endif
 }

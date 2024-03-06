@@ -12,6 +12,7 @@
 from __future__ import print_function, unicode_literals
 
 import os.path
+import re
 
 from esp_docs.conf_docs import *  # noqa: F403,F401
 
@@ -38,6 +39,7 @@ BT_DOCS = ['api-guides/blufi.rst',
 CLASSIC_BT_DOCS = ['api-reference/bluetooth/classic_bt.rst',
                    'api-reference/bluetooth/esp_a2dp.rst',
                    'api-reference/bluetooth/esp_avrc.rst',
+                   'api-reference/bluetooth/esp_hidd.rst',
                    'api-reference/bluetooth/esp_hf_defs.rst',
                    'api-reference/bluetooth/esp_hf_client.rst',
                    'api-reference/bluetooth/esp_hf_ag.rst',
@@ -80,7 +82,9 @@ FTDI_JTAG_DOCS = ['api-guides/jtag-debugging/configure-ft2232h-jtag.rst']
 USB_SERIAL_JTAG_DOCS = ['api-guides/jtag-debugging/configure-builtin-jtag.rst',
                         'api-guides/usb-serial-jtag-console.rst']
 
-ULP_DOCS = ['api-guides/ulp.rst', 'api-guides/ulp_macros.rst']
+ULP_DOCS = ['api-guides/ulp.rst',
+            'api-guides/ulp_macros.rst',
+            'api-guides/ulp_instruction_set.rst']
 
 RISCV_COPROC_DOCS = ['api-guides/ulp-risc-v.rst',]
 
@@ -89,8 +93,7 @@ XTENSA_DOCS = ['api-guides/hlinterrupts.rst',
 
 RISCV_DOCS = []  # type: list[str]
 
-ESP32_DOCS = ['api-guides/ulp_instruction_set.rst',
-              'api-reference/system/himem.rst',
+ESP32_DOCS = ['api-reference/system/himem.rst',
               'api-guides/romconsole.rst',
               'api-reference/system/ipc.rst',
               'security/secure-boot-v1.rst',
@@ -99,7 +102,6 @@ ESP32_DOCS = ['api-guides/ulp_instruction_set.rst',
               'hw-reference/esp32/**'] + LEGACY_DOCS + FTDI_JTAG_DOCS
 
 ESP32S2_DOCS = ['hw-reference/esp32s2/**',
-                'api-guides/ulps2_instruction_set.rst',
                 'api-guides/usb-console.rst',
                 'api-reference/peripherals/ds.rst',
                 'api-reference/peripherals/spi_slave_hd.rst',
@@ -172,6 +174,19 @@ google_analytics_id = os.environ.get('CI_GOOGLE_ANALYTICS_ID', None)
 
 project_homepage = 'https://github.com/espressif/esp-idf'
 
+linkcheck_anchors = False
+
+linkcheck_exclude_documents = ['index',  # several false positives due to the way we link to different sections
+                               'api-reference/protocols/esp_local_ctrl',  # Fails due to `https://<mdns-hostname>.local`
+                               'api-reference/provisioning/wifi_provisioning',  # Fails due to `https://<mdns-hostname>.local`
+                               ]
+
+
+linkcheck_ignore = ['https://webhome.phy.duke.edu/~rgb/General/dieharder.php',  # Certificate error
+                    'https://www.cadence.com/content/dam/cadence-www/global/en_US/documents/tools/ip/tensilica-ip/isa-summary.pdf',  # Rejects user-agent
+                    ]
+
+
 # Custom added feature to allow redirecting old URLs
 with open('../page_redirects.txt') as f:
     lines = [re.sub(' +', ' ', line.strip()) for line in f.readlines() if line.strip() != '' and not line.startswith('#')]
@@ -179,3 +194,5 @@ with open('../page_redirects.txt') as f:
         if len(line.split(' ')) != 2:
             raise RuntimeError('Invalid line in page_redirects.txt: %s' % line)
 html_redirect_pages = [tuple(line.split(' ')) for line in lines]
+
+html_static_path = ['../_static']

@@ -216,7 +216,7 @@ class IDFDUT(DUT.SerialDUT):
             if expected_rom_class and type(inst) != expected_rom_class:
                 raise RuntimeError('Target not expected')
             return inst.read_mac() is not None, get_target_by_rom_class(type(inst))
-        except(esptool.FatalError, RuntimeError):
+        except (esptool.FatalError, RuntimeError):
             return False, None
         finally:
             if inst is not None:
@@ -391,13 +391,14 @@ class IDFDUT(DUT.SerialDUT):
             for (_, f) in encrypt_offs_files:
                 f.close()
 
-    def bootloader_flash(self):
+    def bootloader_flash(self, binary_path=None):
         """
         download bootloader.
 
         :return: None
         """
-        bootloader_path = os.path.join(self.app.binary_path, 'bootloader', 'bootloader.bin')
+        binary_path = self.app.binary_path if binary_path is None else binary_path
+        bootloader_path = os.path.join(binary_path, 'bootloader', 'bootloader.bin')
         offs = int(self.app.get_sdkconfig()['CONFIG_BOOTLOADER_OFFSET_IN_FLASH'], 0)
         flash_files = [(offs, bootloader_path)]
         self.write_flash(flash_files)

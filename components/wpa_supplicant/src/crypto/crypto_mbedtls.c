@@ -37,6 +37,10 @@
 #include "crypto.h"
 #include "mbedtls/esp_config.h"
 
+#ifdef CONFIG_FAST_PBKDF2
+#include "fastpbkdf2.h"
+#endif
+
 static int digest_vector(mbedtls_md_type_t md_type, size_t num_elem,
 			 const u8 *addr[], const size_t *len, u8 *mac)
 {
@@ -120,7 +124,6 @@ struct crypto_hash * crypto_hash_init(enum crypto_hash_alg alg, const u8 *key,
 	struct crypto_hash *ctx;
 	mbedtls_md_type_t md_type;
 	const mbedtls_md_info_t *md_info;
-	int ret;
 
 	switch (alg) {
 		case CRYPTO_HASH_ALG_HMAC_MD5:
@@ -144,29 +147,37 @@ struct crypto_hash * crypto_hash_init(enum crypto_hash_alg alg, const u8 *key,
 	mbedtls_md_init(&ctx->ctx);
 	md_info = mbedtls_md_info_from_type(md_type);
 	if (!md_info) {
-		os_free(ctx);
-		return NULL;
+		goto cleanup;
 	}
-	ret = mbedtls_md_setup(&ctx->ctx, md_info, 1);
-	if (ret != 0) {
-		os_free(ctx);
-		return NULL;
+	if (mbedtls_md_setup(&ctx->ctx, md_info, 1) != 0) {
+		goto cleanup;
 	}
-	mbedtls_md_hmac_starts(&ctx->ctx, key, key_len);
-
+	if (mbedtls_md_hmac_starts(&ctx->ctx, key, key_len) != 0) {
+		goto cleanup;
+	}
 	return ctx;
+cleanup:
+	os_free(ctx);
+	return NULL;
 }
 
 void crypto_hash_update(struct crypto_hash *ctx, const u8 *data, size_t len)
 {
+	int ret;
+
 	if (ctx == NULL) {
 		return;
 	}
-	mbedtls_md_hmac_update(&ctx->ctx, data, len);
+	ret = mbedtls_md_hmac_update(&ctx->ctx, data, len);
+	if (ret != 0) {
+		wpa_printf(MSG_ERROR, "%s: mbedtls_md_hmac_update failed", __func__);
+	}
 }
 
 int crypto_hash_finish(struct crypto_hash *ctx, u8 *mac, size_t *len)
 {
+	int ret;
+
 	if (ctx == NULL) {
 		return -2;
 	}
@@ -176,11 +187,11 @@ int crypto_hash_finish(struct crypto_hash *ctx, u8 *mac, size_t *len)
 		bin_clear_free(ctx, sizeof(*ctx));
 		return 0;
 	}
-	mbedtls_md_hmac_finish(&ctx->ctx, mac);
+	ret = mbedtls_md_hmac_finish(&ctx->ctx, mac);
 	mbedtls_md_free(&ctx->ctx);
 	bin_clear_free(ctx, sizeof(*ctx));
 
-	return 0;
+	return ret;
 }
 
 static int hmac_vector(mbedtls_md_type_t md_type,
@@ -205,17 +216,24 @@ static int hmac_vector(mbedtls_md_type_t md_type,
 		return(ret);
 	}
 
-	mbedtls_md_hmac_starts(&md_ctx, key, key_len);
-
-	for (i = 0; i < num_elem; i++) {
-		mbedtls_md_hmac_update(&md_ctx, addr[i], len[i]);
+	ret = mbedtls_md_hmac_starts(&md_ctx, key, key_len);
+	if (ret != 0) {
+		return(ret);
 	}
 
-	mbedtls_md_hmac_finish(&md_ctx, mac);
+	for (i = 0; i < num_elem; i++) {
+		ret = mbedtls_md_hmac_update(&md_ctx, addr[i], len[i]);
+		if (ret != 0) {
+			return(ret);
+		}
+
+	}
+
+	ret = mbedtls_md_hmac_finish(&md_ctx, mac);
 
 	mbedtls_md_free(&md_ctx);
 
-	return 0;
+	return ret;
 }
 
 int hmac_sha384_vector(const u8 *key, size_t key_len, size_t num_elem,
@@ -644,6 +662,12 @@ int pbkdf2_sha1(const char *passphrase, const u8 *ssid, size_t ssid_len,
 		int iterations, u8 *buf, size_t buflen)
 {
 
+#ifdef CONFIG_FAST_PBKDF2
+       fastpbkdf2_hmac_sha1((const u8 *) passphrase, os_strlen(passphrase),
+                            ssid, ssid_len, iterations, buf, buflen);
+       return 0;
+#else
+
 	mbedtls_md_context_t sha1_ctx;
 	const mbedtls_md_info_t *info_sha1;
 	int ret;
@@ -663,7 +687,7 @@ int pbkdf2_sha1(const char *passphrase, const u8 *ssid, size_t ssid_len,
 
 	ret = mbedtls_pkcs5_pbkdf2_hmac(&sha1_ctx, (const u8 *) passphrase,
 					os_strlen(passphrase) , ssid,
-					ssid_len, iterations, 32, buf);
+					ssid_len, iterations, buflen, buf);
 	if (ret != 0) {
 		ret = -1;
 		goto cleanup;
@@ -672,6 +696,7 @@ int pbkdf2_sha1(const char *passphrase, const u8 *ssid, size_t ssid_len,
 cleanup:
 	mbedtls_md_free(&sha1_ctx);
 	return ret;
+#endif
 }
 
 #ifdef MBEDTLS_DES_C

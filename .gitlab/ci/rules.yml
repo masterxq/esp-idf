@@ -49,8 +49,6 @@
   - "tools/ci/test_build_system*.sh"
 
 .patterns-custom_test: &patterns-custom_test
-  - "components/espcoredump/**/*"
-
   - "tools/ci/python_packages/gitlab_api.py"
   - "tools/ci/python_packages/tiny_test_fw/**/*"
   - "tools/ci/python_packages/ttfw_idf/**/*"
@@ -86,9 +84,6 @@
   - "tools/find_build_apps/**/*"
 
   - "components/**/test_apps/**/*"
-
-.patterns-integration_test: &patterns-integration_test
-  - "tools/ci/python_packages/tiny_test_fw/**/*"
 
 .patterns-host_test: &patterns-host_test
   - ".gitlab/ci/host-test.yml"
@@ -179,13 +174,19 @@
   if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/'
 
 .if-protected: &if-protected
-  if: '($CI_COMMIT_REF_NAME == "master" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/)'
+  if: '($CI_COMMIT_REF_NAME == "master" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/) || $CI_COMMIT_TAG =~ /^qa-test/'
 
 .if-protected-no_label: &if-protected-no_label
   if: '($CI_COMMIT_REF_NAME == "master" || $CI_COMMIT_BRANCH =~ /^release\/v/ || $CI_COMMIT_TAG =~ /^v\d+\.\d+(\.\d+)?($|-)/) && $BOT_TRIGGER_WITH_LABEL == null'
 
+.if-qa-test-tag: &if-qa-test-tag
+  if: '$CI_COMMIT_TAG =~ /^qa-test/'
+
 .if-dev-push: &if-dev-push
-  if: '$CI_COMMIT_REF_NAME != "master" && $CI_COMMIT_BRANCH !~ /^release\/v/ && $CI_COMMIT_TAG !~ /^v\d+\.\d+(\.\d+)?($|-)/ && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event")'
+  if: '$CI_COMMIT_REF_NAME != "master" && $CI_COMMIT_BRANCH !~ /^release\/v/ && $CI_COMMIT_TAG !~ /^v\d+\.\d+(\.\d+)?($|-)/ && $CI_COMMIT_TAG !~ /^qa-test/ && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event")'
+
+.if-merge_request: &if-merge_request
+  if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 .if-schedule: &if-schedule
   if: '$CI_PIPELINE_SOURCE == "schedule"'
@@ -203,9 +204,15 @@
   rules:
     - <<: *if-protected
 
-.rules:protected-no_label:
+.rules:push_to_github:
   rules:
+    - <<: *if-qa-test-tag
+      when: never
     - <<: *if-protected-no_label
+
+.rules:mr:
+  rules:
+    - <<: *if-merge_request
 
 .rules:dev:
   rules:
@@ -221,11 +228,9 @@
     - <<: *if-ref-master
     - <<: *if-schedule
 
-.rules:ref:master-schedule-always:
+.rules:ref:master-always:
   rules:
     - <<: *if-ref-master
-      when: always
-    - <<: *if-schedule
       when: always
 
 .rules:patterns:clang_tidy:
@@ -318,9 +323,6 @@
 .if-label-host_test: &if-label-host_test
   if: '$BOT_LABEL_HOST_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*host_test(?:,[^,\n\r]+)*$/i'
 
-.if-label-integration_test: &if-label-integration_test
-  if: '$BOT_LABEL_INTEGRATION_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*integration_test(?:,[^,\n\r]+)*$/i'
-
 .if-label-iperf_stress_test: &if-label-iperf_stress_test
   if: '$BOT_LABEL_IPERF_STRESS_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*iperf_stress_test(?:,[^,\n\r]+)*$/i'
 
@@ -335,6 +337,9 @@
 
 .if-label-submodule: &if-label-submodule
   if: '$BOT_LABEL_SUBMODULE || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*submodule(?:,[^,\n\r]+)*$/i'
+
+.if-label-target_test: &if-label-target_test
+  if: '$BOT_LABEL_TARGET_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*target_test(?:,[^,\n\r]+)*$/i'
 
 .if-label-unit_test: &if-label-unit_test
   if: '$BOT_LABEL_UNIT_TEST || $CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*unit_test(?:,[^,\n\r]+)*$/i'
@@ -366,12 +371,35 @@
     - <<: *if-dev-push
       changes: *patterns-build_system
 
+.rules:build:component_ut:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-label-component_ut
+    - <<: *if-label-component_ut_esp32
+    - <<: *if-label-component_ut_esp32c3
+    - <<: *if-label-component_ut_esp32s2
+    - <<: *if-label-component_ut_esp32s3
+    - <<: *if-label-target_test
+    - <<: *if-label-unit_test
+    - <<: *if-label-unit_test_esp32
+    - <<: *if-label-unit_test_esp32c3
+    - <<: *if-label-unit_test_esp32s2
+    - <<: *if-label-unit_test_esp32s3
+    - <<: *if-dev-push
+      changes: *patterns-build_components
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-component_ut
+
 .rules:build:component_ut-esp32:
   rules:
     - <<: *if-protected
     - <<: *if-label-build
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32
     - <<: *if-dev-push
@@ -387,6 +415,7 @@
     - <<: *if-label-build
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32c3
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32c3
     - <<: *if-dev-push
@@ -402,6 +431,7 @@
     - <<: *if-label-build
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32s2
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s2
     - <<: *if-dev-push
@@ -417,6 +447,7 @@
     - <<: *if-label-build
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32s3
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s3
     - <<: *if-dev-push
@@ -426,12 +457,31 @@
     - <<: *if-dev-push
       changes: *patterns-component_ut
 
+.rules:build:custom_test:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-label-custom_test
+    - <<: *if-label-custom_test_esp32
+    - <<: *if-label-custom_test_esp32c3
+    - <<: *if-label-custom_test_esp32s2
+    - <<: *if-label-custom_test_esp32s3
+    - <<: *if-label-target_test
+    - <<: *if-label-weekend_test
+    - <<: *if-dev-push
+      changes: *patterns-build_components
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-custom_test
+
 .rules:build:custom_test-esp32:
   rules:
     - <<: *if-protected
     - <<: *if-label-build
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32
+    - <<: *if-label-target_test
     - <<: *if-label-weekend_test
     - <<: *if-dev-push
       changes: *patterns-build_components
@@ -446,6 +496,7 @@
     - <<: *if-label-build
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32c3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build_components
     - <<: *if-dev-push
@@ -459,6 +510,7 @@
     - <<: *if-label-build
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32s2
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build_components
     - <<: *if-dev-push
@@ -472,6 +524,7 @@
     - <<: *if-label-build
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32s3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build_components
     - <<: *if-dev-push
@@ -487,6 +540,26 @@
     - <<: *if-dev-push
       changes: *patterns-docker
 
+.rules:build:example_test:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-label-example_test
+    - <<: *if-label-example_test_esp32
+    - <<: *if-label-example_test_esp32c3
+    - <<: *if-label-example_test_esp32s2
+    - <<: *if-label-example_test_esp32s3
+    - <<: *if-label-iperf_stress_test
+    - <<: *if-label-target_test
+    - <<: *if-dev-push
+      changes: *patterns-build-example_test
+    - <<: *if-dev-push
+      changes: *patterns-build_components
+    - <<: *if-dev-push
+      changes: *patterns-build_system
+    - <<: *if-dev-push
+      changes: *patterns-example_test
+
 .rules:build:example_test-esp32:
   rules:
     - <<: *if-protected
@@ -494,6 +567,7 @@
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32
     - <<: *if-label-iperf_stress_test
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -509,6 +583,7 @@
     - <<: *if-label-build
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32c3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -524,6 +599,7 @@
     - <<: *if-label-build
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32s2
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -539,6 +615,7 @@
     - <<: *if-label-build
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32s3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -547,18 +624,6 @@
       changes: *patterns-build_system
     - <<: *if-dev-push
       changes: *patterns-example_test
-
-.rules:build:integration_test:
-  rules:
-    - <<: *if-protected
-    - <<: *if-label-build
-    - <<: *if-label-integration_test
-    - <<: *if-dev-push
-      changes: *patterns-build_components
-    - <<: *if-dev-push
-      changes: *patterns-build_system
-    - <<: *if-dev-push
-      changes: *patterns-integration_test
 
 .rules:build:macos:
   rules:
@@ -588,8 +653,8 @@
     - <<: *if-label-example_test_esp32c3
     - <<: *if-label-example_test_esp32s2
     - <<: *if-label-example_test_esp32s3
-    - <<: *if-label-integration_test
     - <<: *if-label-iperf_stress_test
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32
     - <<: *if-label-unit_test_esp32c3
@@ -609,7 +674,22 @@
     - <<: *if-dev-push
       changes: *patterns-example_test
     - <<: *if-dev-push
-      changes: *patterns-integration_test
+      changes: *patterns-unit_test
+
+.rules:build:unit_test:
+  rules:
+    - <<: *if-protected
+    - <<: *if-label-build
+    - <<: *if-label-target_test
+    - <<: *if-label-unit_test
+    - <<: *if-label-unit_test_esp32
+    - <<: *if-label-unit_test_esp32c3
+    - <<: *if-label-unit_test_esp32s2
+    - <<: *if-label-unit_test_esp32s3
+    - <<: *if-dev-push
+      changes: *patterns-build_components
+    - <<: *if-dev-push
+      changes: *patterns-build_system
     - <<: *if-dev-push
       changes: *patterns-unit_test
 
@@ -617,6 +697,7 @@
   rules:
     - <<: *if-protected
     - <<: *if-label-build
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32
     - <<: *if-dev-push
@@ -630,6 +711,7 @@
   rules:
     - <<: *if-protected
     - <<: *if-label-build
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32c3
     - <<: *if-dev-push
@@ -643,6 +725,7 @@
   rules:
     - <<: *if-protected
     - <<: *if-label-build
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s2
     - <<: *if-dev-push
@@ -656,6 +739,7 @@
   rules:
     - <<: *if-protected
     - <<: *if-label-build
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s3
     - <<: *if-dev-push
@@ -692,50 +776,6 @@
   rules:
     - <<: *if-label-weekend_test
 
-.rules:test:any_test:
-  rules:
-    - <<: *if-protected
-    - <<: *if-label-build-only
-      when: never
-    - <<: *if-label-component_ut
-    - <<: *if-label-component_ut_esp32
-    - <<: *if-label-component_ut_esp32c3
-    - <<: *if-label-component_ut_esp32s2
-    - <<: *if-label-component_ut_esp32s3
-    - <<: *if-label-custom_test
-    - <<: *if-label-custom_test_esp32
-    - <<: *if-label-custom_test_esp32c3
-    - <<: *if-label-custom_test_esp32s2
-    - <<: *if-label-custom_test_esp32s3
-    - <<: *if-label-example_test
-    - <<: *if-label-example_test_esp32
-    - <<: *if-label-example_test_esp32c3
-    - <<: *if-label-example_test_esp32s2
-    - <<: *if-label-example_test_esp32s3
-    - <<: *if-label-host_test
-    - <<: *if-label-integration_test
-    - <<: *if-label-iperf_stress_test
-    - <<: *if-label-unit_test
-    - <<: *if-label-unit_test_esp32
-    - <<: *if-label-unit_test_esp32c3
-    - <<: *if-label-unit_test_esp32s2
-    - <<: *if-label-unit_test_esp32s3
-    - <<: *if-label-weekend_test
-    - <<: *if-dev-push
-      changes: *patterns-build-example_test
-    - <<: *if-dev-push
-      changes: *patterns-component_ut
-    - <<: *if-dev-push
-      changes: *patterns-custom_test
-    - <<: *if-dev-push
-      changes: *patterns-example_test
-    - <<: *if-dev-push
-      changes: *patterns-host_test
-    - <<: *if-dev-push
-      changes: *patterns-integration_test
-    - <<: *if-dev-push
-      changes: *patterns-unit_test
-
 .rules:test:component_ut-esp32:
   rules:
     - <<: *if-protected
@@ -743,6 +783,7 @@
       when: never
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32
     - <<: *if-dev-push
@@ -755,6 +796,7 @@
       when: never
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32c3
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32c3
     - <<: *if-dev-push
@@ -767,6 +809,7 @@
       when: never
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32s2
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s2
     - <<: *if-dev-push
@@ -779,6 +822,7 @@
       when: never
     - <<: *if-label-component_ut
     - <<: *if-label-component_ut_esp32s3
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s3
     - <<: *if-dev-push
@@ -791,6 +835,7 @@
       when: never
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-custom_test
 
@@ -801,6 +846,7 @@
       when: never
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32c3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-custom_test
 
@@ -811,6 +857,7 @@
       when: never
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32s2
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-custom_test
 
@@ -821,6 +868,7 @@
       when: never
     - <<: *if-label-custom_test
     - <<: *if-label-custom_test_esp32s3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-custom_test
 
@@ -831,6 +879,7 @@
       when: never
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -843,6 +892,7 @@
       when: never
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32c3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -855,6 +905,7 @@
       when: never
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32s2
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -867,6 +918,7 @@
       when: never
     - <<: *if-label-example_test
     - <<: *if-label-example_test_esp32s3
+    - <<: *if-label-target_test
     - <<: *if-dev-push
       changes: *patterns-build-example_test
     - <<: *if-dev-push
@@ -881,15 +933,6 @@
     - <<: *if-dev-push
       changes: *patterns-host_test
 
-.rules:test:integration_test:
-  rules:
-    - <<: *if-protected
-    - <<: *if-label-build-only
-      when: never
-    - <<: *if-label-integration_test
-    - <<: *if-dev-push
-      changes: *patterns-integration_test
-
 .rules:test:submodule:
   rules:
     - <<: *if-protected
@@ -899,50 +942,12 @@
     - <<: *if-dev-push
       changes: *patterns-submodule
 
-.rules:test:target_test:
-  rules:
-    - <<: *if-protected
-    - <<: *if-label-build-only
-      when: never
-    - <<: *if-label-component_ut
-    - <<: *if-label-component_ut_esp32
-    - <<: *if-label-component_ut_esp32c3
-    - <<: *if-label-component_ut_esp32s2
-    - <<: *if-label-component_ut_esp32s3
-    - <<: *if-label-custom_test
-    - <<: *if-label-custom_test_esp32
-    - <<: *if-label-custom_test_esp32c3
-    - <<: *if-label-custom_test_esp32s2
-    - <<: *if-label-custom_test_esp32s3
-    - <<: *if-label-example_test
-    - <<: *if-label-example_test_esp32
-    - <<: *if-label-example_test_esp32c3
-    - <<: *if-label-example_test_esp32s2
-    - <<: *if-label-example_test_esp32s3
-    - <<: *if-label-integration_test
-    - <<: *if-label-unit_test
-    - <<: *if-label-unit_test_esp32
-    - <<: *if-label-unit_test_esp32c3
-    - <<: *if-label-unit_test_esp32s2
-    - <<: *if-label-unit_test_esp32s3
-    - <<: *if-dev-push
-      changes: *patterns-build-example_test
-    - <<: *if-dev-push
-      changes: *patterns-component_ut
-    - <<: *if-dev-push
-      changes: *patterns-custom_test
-    - <<: *if-dev-push
-      changes: *patterns-example_test
-    - <<: *if-dev-push
-      changes: *patterns-integration_test
-    - <<: *if-dev-push
-      changes: *patterns-unit_test
-
 .rules:test:unit_test-esp32:
   rules:
     - <<: *if-protected
     - <<: *if-label-build-only
       when: never
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32
     - <<: *if-dev-push
@@ -953,6 +958,7 @@
     - <<: *if-protected
     - <<: *if-label-build-only
       when: never
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32c3
     - <<: *if-dev-push
@@ -963,6 +969,7 @@
     - <<: *if-protected
     - <<: *if-label-build-only
       when: never
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s2
     - <<: *if-dev-push
@@ -973,6 +980,7 @@
     - <<: *if-protected
     - <<: *if-label-build-only
       when: never
+    - <<: *if-label-target_test
     - <<: *if-label-unit_test
     - <<: *if-label-unit_test_esp32s3
     - <<: *if-dev-push

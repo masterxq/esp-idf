@@ -471,6 +471,7 @@ static void bta_av_api_sink_enable(tBTA_AV_DATA *p_data)
     APPL_TRACE_DEBUG("bta_av_api_sink_enable %d \n", activate_sink)
     char p_service_name[BTA_SERVICE_NAME_LEN + 1];
     BCM_STRNCPY_S(p_service_name, BTIF_AVK_SERVICE_NAME, BTA_SERVICE_NAME_LEN);
+    p_service_name[BTA_SERVICE_NAME_LEN] = '\0';
 
     if (activate_sink) {
         AVDT_SINK_Activate();
@@ -512,6 +513,7 @@ static void bta_av_api_register(tBTA_AV_DATA *p_data)
     UINT8           index = 0;
     char p_avk_service_name[BTA_SERVICE_NAME_LEN + 1];
     BCM_STRNCPY_S(p_avk_service_name, BTIF_AVK_SERVICE_NAME, BTA_SERVICE_NAME_LEN);
+    p_avk_service_name[BTA_SERVICE_NAME_LEN] = '\0';
 
     memset(&cs, 0, sizeof(tAVDT_CS));
 
@@ -1243,9 +1245,11 @@ BOOLEAN bta_av_hdl_event(BT_HDR *p_msg)
     } else {
         APPL_TRACE_VERBOSE("handle=0x%x\n", p_msg->layer_specific);
         tBTA_AV_SCB *p_scb = bta_av_hndl_to_scb(p_msg->layer_specific);
-        p_scb->disc_rsn = p_msg->offset;
-        /* stream state machine events */
-        bta_av_ssm_execute(p_scb, p_msg->event, (tBTA_AV_DATA *) p_msg);
+        if (p_scb) {
+            p_scb->disc_rsn = p_msg->offset;
+            /* stream state machine events */
+            bta_av_ssm_execute(p_scb, p_msg->event, (tBTA_AV_DATA *) p_msg);
+        }
     }
     return TRUE;
 }

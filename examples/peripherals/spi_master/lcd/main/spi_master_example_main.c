@@ -39,13 +39,13 @@
 #define PIN_NUM_DC   21
 #define PIN_NUM_RST  18
 #define PIN_NUM_BCKL 5
-#elif defined CONFIG_IDF_TARGET_ESP32S2
+#elif defined CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3
 #define LCD_HOST    SPI2_HOST
 
 #define PIN_NUM_MISO 37
 #define PIN_NUM_MOSI 35
 #define PIN_NUM_CLK  36
-#define PIN_NUM_CS   34
+#define PIN_NUM_CS   45
 
 #define PIN_NUM_DC   4
 #define PIN_NUM_RST  5
@@ -248,9 +248,11 @@ void lcd_init(spi_device_handle_t spi)
     const lcd_init_cmd_t* lcd_init_cmds;
 
     //Initialize non-SPI GPIOs
-    gpio_set_direction(PIN_NUM_DC, GPIO_MODE_OUTPUT);
-    gpio_set_direction(PIN_NUM_RST, GPIO_MODE_OUTPUT);
-    gpio_set_direction(PIN_NUM_BCKL, GPIO_MODE_OUTPUT);
+    gpio_config_t io_conf = {};
+    io_conf.pin_bit_mask = ((1ULL<<PIN_NUM_DC) | (1ULL<<PIN_NUM_RST) | (1ULL<<PIN_NUM_BCKL));
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = true;
+    gpio_config(&io_conf);
 
     //Reset the display
     gpio_set_level(PIN_NUM_RST, 0);
@@ -336,20 +338,20 @@ static void send_lines(spi_device_handle_t spi, int ypos, uint16_t *linedata)
         }
         trans[x].flags=SPI_TRANS_USE_TXDATA;
     }
-    trans[0].tx_data[0]=0x2A;           //Column Address Set
-    trans[1].tx_data[0]=0;              //Start Col High
-    trans[1].tx_data[1]=0;              //Start Col Low
-    trans[1].tx_data[2]=(320)>>8;       //End Col High
-    trans[1].tx_data[3]=(320)&0xff;     //End Col Low
-    trans[2].tx_data[0]=0x2B;           //Page address set
-    trans[3].tx_data[0]=ypos>>8;        //Start page high
-    trans[3].tx_data[1]=ypos&0xff;      //start page low
-    trans[3].tx_data[2]=(ypos+PARALLEL_LINES)>>8;    //end page high
-    trans[3].tx_data[3]=(ypos+PARALLEL_LINES)&0xff;  //end page low
-    trans[4].tx_data[0]=0x2C;           //memory write
-    trans[5].tx_buffer=linedata;        //finally send the line data
-    trans[5].length=320*2*8*PARALLEL_LINES;          //Data length, in bits
-    trans[5].flags=0; //undo SPI_TRANS_USE_TXDATA flag
+    trans[0].tx_data[0] = 0x2A;             //Column Address Set
+    trans[1].tx_data[0] = 0;                //Start Col High
+    trans[1].tx_data[1] = 0;                //Start Col Low
+    trans[1].tx_data[2] = (320 - 1) >> 8;   //End Col High
+    trans[1].tx_data[3] = (320 - 1) & 0xff; //End Col Low
+    trans[2].tx_data[0] = 0x2B;             //Page address set
+    trans[3].tx_data[0] = ypos >> 8;        //Start page high
+    trans[3].tx_data[1] = ypos & 0xff;      //start page low
+    trans[3].tx_data[2] = (ypos + PARALLEL_LINES - 1) >> 8;     //end page high
+    trans[3].tx_data[3] = (ypos + PARALLEL_LINES - 1) & 0xff;   //end page low
+    trans[4].tx_data[0] = 0x2C;             //memory write
+    trans[5].tx_buffer = linedata;          //finally send the line data
+    trans[5].length = 320 * 2 * 8 * PARALLEL_LINES;  //Data length, in bits
+    trans[5].flags = 0; //undo SPI_TRANS_USE_TXDATA flag
 
     //Queue all transactions.
     for (x=0; x<6; x++) {

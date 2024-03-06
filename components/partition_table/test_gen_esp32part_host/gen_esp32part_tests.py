@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import division, print_function
 
 import csv
@@ -387,6 +389,38 @@ class CommandLineTests(Py23TestCase):
 
 class VerificationTests(Py23TestCase):
 
+    def _run_genesp32(self, csvcontents, args):
+        csvpath = tempfile.mktemp()
+        with open(csvpath, 'w') as f:
+            f.write(csvcontents)
+        try:
+            output = subprocess.check_output([sys.executable, '../gen_esp32part.py', csvpath] + args, stderr=subprocess.STDOUT)
+            return output.strip()
+        except subprocess.CalledProcessError as e:
+            return e.output.strip()
+        finally:
+            os.remove(csvpath)
+
+    def test_check_secure_app_size(self):
+        sample_csv = """
+ota_0,  app, ota_0, ,  0x101000
+ota_1,  app, ota_1, ,  0x100800
+        """
+
+        def rge(args):
+            return self._run_genesp32(sample_csv, args)
+
+        # Valid test that would pass with the above partition table
+        partfile = tempfile.mktemp()
+        self.assertEqual(rge([partfile]), b'Parsing CSV input...\nVerifying table...')
+        os.remove(partfile)
+        # Failure case 1, incorrect ota_0 partition size
+        self.assertEqual(rge(['-q', '--secure', 'v1']),
+                         b'Partition ota_0 invalid: Size 0x101000 is not aligned to 0x10000')
+        # Failure case 2, incorrect ota_1 partition size
+        self.assertEqual(rge(['-q', '--secure', 'v2']),
+                         b'Partition ota_1 invalid: Size 0x100800 is not aligned to 0x1000')
+
     def test_bad_alignment(self):
         csv = """
 # Name,Type, SubType,Offset,Size
@@ -466,6 +500,14 @@ ota_1,             0,  ota_1,          , 1M,
 
         finally:
             sys.stderr = sys.__stderr__
+
+    def test_size_error(self):
+        csv_txt = """
+factory, app, factory, 0x10000, 20M
+        """
+        with self.assertRaisesRegex(gen_esp32part.InputError, r'does not fit'):
+            t = gen_esp32part.PartitionTable.from_csv(csv_txt)
+            t.verify_size_fits(16 * 1024 * 1024)
 
 
 class PartToolTests(Py23TestCase):

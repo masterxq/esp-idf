@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,6 +19,8 @@
 #include "common/ieee802_11_common.h"
 #include "esp_common_i.h"
 #include "common/wnm_sta.h"
+#include "esp_scan_i.h"
+#include "esp_common_i.h"
 
 extern struct wpa_supplicant g_wpa_supp;
 
@@ -28,11 +30,17 @@ static void scan_done_event_handler(void *arg, STATUS status)
 
 	/* update last scan time */
 	wpa_s->scan_start_tsf = esp_wifi_get_tsf_time(WIFI_IF_STA);
-	if (!wpa_s->scanning) {
+	if (wpa_s->scanning) {
 		wpa_s->type &= ~(1 << WLAN_FC_STYPE_BEACON) & ~(1 << WLAN_FC_STYPE_PROBE_RESP);
 		esp_wifi_register_mgmt_frame_internal(wpa_s->type, wpa_s->subtype);
 	}
-	esp_supplicant_post_evt(SIG_SUPPLICANT_SCAN_DONE, 0);
+#ifdef CONFIG_SUPPLICANT_TASK
+	if (esp_supplicant_post_evt(SIG_SUPPLICANT_SCAN_DONE, 0) != 0) {
+		wpa_printf(MSG_ERROR, "Posting of scan done failed!");
+	}
+#else
+       esp_supplicant_handle_scan_done_evt();
+#endif /*CONFIG_SUPPLICANT_TASK*/
 }
 
 static void handle_wnm_scan_done(struct wpa_supplicant *wpa_s)
@@ -55,13 +63,10 @@ static void handle_wnm_scan_done(struct wpa_supplicant *wpa_s)
 
 static void scan_done_cleanup(struct wpa_supplicant *wpa_s)
 {
-	uint16_t number = 1;
-	wifi_ap_record_t ap_records;
-
 	wpa_s->scanning = 0;
 	wpa_s->scan_reason = 0;
 	/* clean scan list from net80211 */
-	esp_wifi_scan_get_ap_records(&number, &ap_records);
+	esp_wifi_clear_ap_list();
 }
 
 void esp_supplicant_handle_scan_done_evt(void)
@@ -89,6 +94,7 @@ void esp_scan_init(struct wpa_supplicant *wpa_s)
 	wpa_s->scanning = 0;
 	wpa_bss_init(wpa_s);
 	wpa_s->last_scan_res = NULL;
+	wpa_s->last_scan_res_used = 0;
 }
 
 void esp_scan_deinit(struct wpa_supplicant *wpa_s)
@@ -96,10 +102,11 @@ void esp_scan_deinit(struct wpa_supplicant *wpa_s)
 	wpa_bss_deinit(wpa_s);
 	os_free(wpa_s->last_scan_res);
 	wpa_s->last_scan_res = NULL;
+	wpa_s->last_scan_res_used = 0;
 }
 
 int esp_handle_beacon_probe(u8 type, u8 *frame, size_t len, u8 *sender,
-			    u32 rssi, u8 channel, u64 current_tsf)
+			    int8_t rssi, u8 channel, u64 current_tsf)
 {
 	struct wpa_supplicant *wpa_s = &g_wpa_supp;
 	struct os_reltime now;

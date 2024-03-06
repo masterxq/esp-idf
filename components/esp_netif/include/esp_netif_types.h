@@ -33,6 +33,7 @@ extern "C" {
 #define ESP_ERR_ESP_NETIF_DNS_NOT_CONFIGURED    ESP_ERR_ESP_NETIF_BASE + 0x0A
 #define ESP_ERR_ESP_NETIF_MLD6_FAILED           ESP_ERR_ESP_NETIF_BASE + 0x0B
 #define ESP_ERR_ESP_NETIF_IP6_ADDR_FAILED       ESP_ERR_ESP_NETIF_BASE + 0x0C
+#define ESP_ERR_ESP_NETIF_DHCPS_START_FAILED    ESP_ERR_ESP_NETIF_BASE + 0x0D
 
 
 /** @brief Type of esp_netif_object server */
@@ -112,6 +113,11 @@ typedef struct {
     esp_ip6_addr_t ip; /**< Interface IPV6 address */
 } esp_netif_ip6_info_t;
 
+
+/**
+ * @brief Event structure for IP_EVENT_GOT_IP event
+ *
+ */
 typedef struct {
     int if_index;                    /*!< Interface index for which the event is received (left for legacy compilation) */
     esp_netif_t *esp_netif;          /*!< Pointer to corresponding esp-netif object */
@@ -149,6 +155,7 @@ typedef enum esp_netif_flags {
     ESP_NETIF_FLAG_EVENT_IP_MODIFIED = 1 << 4,
     ESP_NETIF_FLAG_IS_PPP = 1 << 5,
     ESP_NETIF_FLAG_IS_SLIP = 1 << 6,
+    ESP_NETIF_FLAG_MLDV6_REPORT = 1 << 7,
 } esp_netif_flags_t;
 
 typedef enum esp_netif_ip_event_type {
@@ -164,6 +171,10 @@ typedef enum esp_netif_ip_event_type {
 //      3) network stack specific config (esp_netif_net_stack_ifconfig_t) -- no publicly available
 //
 
+/**
+ * @brief ESP-netif inherent config parameters
+ *
+ */
 typedef struct esp_netif_inherent_config {
     esp_netif_flags_t flags;         /*!< flags that define esp-netif behavior */
     uint8_t mac[6];                  /*!< initial mac address for this interface */
@@ -185,19 +196,23 @@ typedef struct esp_netif_config esp_netif_config_t;
  */
 typedef void * esp_netif_iodriver_handle;
 
+/**
+ * @brief ESP-netif driver base handle
+ *
+ */
 typedef struct esp_netif_driver_base_s {
-    esp_err_t (*post_attach)(esp_netif_t *netif, esp_netif_iodriver_handle h);
-    esp_netif_t *netif;
+    esp_err_t (*post_attach)(esp_netif_t *netif, esp_netif_iodriver_handle h); /*!< post attach function pointer */
+    esp_netif_t *netif; /*!< netif handle */
 } esp_netif_driver_base_t;
 
 /**
  * @brief  Specific IO driver configuration
  */
 struct esp_netif_driver_ifconfig {
-    esp_netif_iodriver_handle handle;
-    esp_err_t (*transmit)(void *h, void *buffer, size_t len);
-    esp_err_t (*transmit_wrap)(void *h, void *buffer, size_t len, void *netstack_buffer);
-    void (*driver_free_rx_buffer)(void *h, void* buffer);
+    esp_netif_iodriver_handle handle; /*!< io-driver handle */
+    esp_err_t (*transmit)(void *h, void *buffer, size_t len); /*!< transmit function pointer */
+    esp_err_t (*transmit_wrap)(void *h, void *buffer, size_t len, void *netstack_buffer); /*!< transmit wrap function pointer */
+    void (*driver_free_rx_buffer)(void *h, void* buffer); /*!< free rx buffer function pointer */
 };
 
 typedef struct esp_netif_driver_ifconfig esp_netif_driver_ifconfig_t;
@@ -212,9 +227,9 @@ typedef struct esp_netif_netstack_config esp_netif_netstack_config_t;
  * @brief  Generic esp_netif configuration
  */
 struct esp_netif_config {
-    const esp_netif_inherent_config_t *base;
-    const esp_netif_driver_ifconfig_t *driver;
-    const esp_netif_netstack_config_t *stack;
+    const esp_netif_inherent_config_t *base; /*!< base config */
+    const esp_netif_driver_ifconfig_t *driver; /*!< driver config */
+    const esp_netif_netstack_config_t *stack; /*!< stack config */
 };
 
 /**

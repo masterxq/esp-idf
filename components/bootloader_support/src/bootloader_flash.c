@@ -10,6 +10,7 @@
 #include <esp_flash_encrypt.h>
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
+#include "hal/efuse_hal.h"
 
 #if CONFIG_IDF_TARGET_ESP32
 #   include "soc/spi_struct.h"
@@ -36,22 +37,22 @@
 #endif
 
 #ifdef CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH
-#define ENCRYPTION_IS_VIRTUAL 1
+#define ENCRYPTION_IS_VIRTUAL (!efuse_hal_flash_encryption_enabled())
 #else
 #define ENCRYPTION_IS_VIRTUAL 0
 #endif
 
 #define BYTESHIFT(VAR, IDX)    (((VAR) >> ((IDX) * 8)) & 0xFF)
 #define ISSI_ID                0x9D
+#define MXIC_ID                0xC2
 #define GD_Q_ID_HIGH           0xC8
 #define GD_Q_ID_MID            0x40
 #define GD_Q_ID_LOW            0x16
 
 #define ESP_BOOTLOADER_SPIFLASH_BP_MASK_ISSI    (BIT7 | BIT5 | BIT4 | BIT3 | BIT2)
-#define ESP_BOOTLOADER_SPIFLASH_QE_16B           BIT9   // QE position when you write 16 bits at one time.
-#define ESP_BOOTLOADER_SPIFLASH_QE_8B            BIT1   // QE position when you write 8 bits(for SR2) at one time.
-#define ESP_BOOTLOADER_SPIFLASH_WRITE_8B         (8)
-#define ESP_BOOTLOADER_SPIFLASH_WRITE_16B        (16)
+#define ESP_BOOTLOADER_SPIFLASH_QE_GD_SR2        BIT1   // QE position when you write 8 bits(for SR2) at one time.
+#define ESP_BOOTLOADER_SPIFLASH_QE_SR1_2BYTE     BIT9   // QE position when you write 16 bits at one time.
+
 
 #ifndef BOOTLOADER_BUILD
 /* Normal app version maps to esp_spi_flash.h operations...
@@ -144,6 +145,11 @@ esp_err_t bootloader_flash_erase_range(uint32_t start_addr, uint32_t size)
 #include "esp32h2/rom/cache.h"
 #include "soc/cache_memory.h"
 #endif
+
+#if CONFIG_IDF_TARGET_ESP32S3
+#include "esp32s3/rom/opi_flash.h"
+#endif
+
 static const char *TAG = "bootloader_flash";
 
 #if CONFIG_IDF_TARGET_ESP32
@@ -481,6 +487,34 @@ esp_err_t bootloader_flash_erase_range(uint32_t start_addr, uint32_t size)
     return spi_to_esp_err(rc);
 }
 
+#if CONFIG_BOOTLOADER_CACHE_32BIT_ADDR_OCTAL_FLASH
+void bootloader_flash_32bits_address_map_enable(esp_rom_spiflash_read_mode_t flash_mode)
+{
+    esp_rom_opiflash_spi0rd_t cache_rd = {};
+    switch (flash_mode) {
+    case ESP_ROM_SPIFLASH_FASTRD_MODE:
+        cache_rd.addr_bit_len = 32;
+        cache_rd.dummy_bit_len = 8;
+        cache_rd.cmd = CMD_FASTRD_4B;
+        cache_rd.cmd_bit_len = 8;
+        break;
+     case ESP_ROM_SPIFLASH_SLOWRD_MODE:
+        cache_rd.addr_bit_len = 32;
+        cache_rd.dummy_bit_len = 0;
+        cache_rd.cmd = CMD_SLOWRD_4B;
+        cache_rd.cmd_bit_len = 8;
+        break;
+    default:
+        assert(false);
+        break;
+    }
+    uint32_t autoload = Cache_Suspend_DCache();
+    esp_rom_opiflash_cache_mode_config(flash_mode, &cache_rd);
+    Cache_Resume_DCache(autoload);
+}
+#endif
+
+
 #endif // BOOTLOADER_BUILD
 
 
@@ -495,72 +529,77 @@ FORCE_INLINE_ATTR bool is_gd_q_chip(const esp_rom_spiflash_chip_t* chip)
     return BYTESHIFT(chip->device_id, 2) == GD_Q_ID_HIGH && BYTESHIFT(chip->device_id, 1) == GD_Q_ID_MID && BYTESHIFT(chip->device_id, 0) >= GD_Q_ID_LOW;
 }
 
+FORCE_INLINE_ATTR bool is_mxic_chip(const esp_rom_spiflash_chip_t* chip)
+{
+    return BYTESHIFT(chip->device_id, 2) == MXIC_ID;
+}
+
 esp_err_t IRAM_ATTR __attribute__((weak)) bootloader_flash_unlock(void)
 {
+    // At the beginning status == new_status == status_sr2 == new_status_sr2 == 0.
+    // If the register doesn't need to be updated, keep them the same (0), so that no command will be actually sent.
     uint16_t status = 0;    // status for SR1 or SR1+SR2 if writing SR with 01H + 2Bytes.
     uint16_t new_status = 0;
     uint8_t status_sr2 = 0;    // status_sr2 for SR2.
     uint8_t new_status_sr2 = 0;
-    uint8_t write_sr_bit = 0;
+    uint8_t sr1_bit_num = 0;
     esp_err_t err = ESP_OK;
 
     esp_rom_spiflash_wait_idle(&g_rom_flashchip);
-    if (is_issi_chip(&g_rom_flashchip)) {
-        write_sr_bit = ESP_BOOTLOADER_SPIFLASH_WRITE_8B;
-        // ISSI chips have different QE position
-
+    if (is_issi_chip(&g_rom_flashchip) || is_mxic_chip(&g_rom_flashchip)) {
+        // Currently ISSI & MXIC share the same command and register layout, which is different from the default model.
+        // If any code here needs to be modified, check both chips.
         status = bootloader_execute_flash_command(CMD_RDSR, 0, 0, 8);
 
         /* Clear all bits in the mask.
         (This is different from ROM esp_rom_spiflash_unlock, which keeps all bits as-is.)
         */
+        sr1_bit_num = 8;
         new_status = status & (~ESP_BOOTLOADER_SPIFLASH_BP_MASK_ISSI);
-        // Skip if nothing needs to be cleared. Otherwise will waste time waiting for the flash to clear nothing.
     } else if (is_gd_q_chip(&g_rom_flashchip)) {
         /* The GD chips behaviour is to clear all bits in SR1 and clear bits in SR2 except QE bit.
            Use 01H to write SR1 and 31H to write SR2.
         */
-        write_sr_bit = ESP_BOOTLOADER_SPIFLASH_WRITE_8B;
-
         status = bootloader_execute_flash_command(CMD_RDSR, 0, 0, 8);
+        sr1_bit_num = 8;
         new_status = 0;
 
         status_sr2 = bootloader_execute_flash_command(CMD_RDSR2, 0, 0, 8);
-        new_status_sr2 = status_sr2 & ESP_BOOTLOADER_SPIFLASH_QE_8B;
+        new_status_sr2 = status_sr2 & ESP_BOOTLOADER_SPIFLASH_QE_GD_SR2;
     } else {
         /* For common behaviour, like XMC chips, Use 01H+2Bytes to write both SR1 and SR2*/
-        write_sr_bit = ESP_BOOTLOADER_SPIFLASH_WRITE_16B;
         status = bootloader_execute_flash_command(CMD_RDSR, 0, 0, 8) | (bootloader_execute_flash_command(CMD_RDSR2, 0, 0, 8) << 8);
 
         /* Clear all bits except QE, if it is set.
         (This is different from ROM esp_rom_spiflash_unlock, which keeps all bits as-is.)
         */
-        new_status = status & ESP_BOOTLOADER_SPIFLASH_QE_16B;
+        sr1_bit_num = 16;
+        new_status = status & ESP_BOOTLOADER_SPIFLASH_QE_SR1_2BYTE;
     }
 
+    // When SR is written, set to true to indicate that WRDI need to be sent to ensure the protection is ON before return.
+    bool status_written = false;
+    // Skip if nothing needs to be changed. Meaningless writing to SR increases the risk during write and wastes time.
     if (status != new_status) {
-        /* if the status in SR not equal to the ideal status, the status need to be updated */
         esp_rom_spiflash_wait_idle(&g_rom_flashchip);
         bootloader_execute_flash_command(CMD_WREN, 0, 0, 0);
-        esp_rom_spiflash_wait_idle(&g_rom_flashchip);
-        bootloader_execute_flash_command(CMD_WRSR, new_status, write_sr_bit, 0);
-        esp_rom_spiflash_wait_idle(&g_rom_flashchip);
+        bootloader_execute_flash_command(CMD_WRSR, new_status, sr1_bit_num, 0);
+        status_written = true;
     }
 
     if (status_sr2 != new_status_sr2) {
-        /* If the status in SR2 not equal to the ideal status, the status need to be updated.
-           It doesn't need to be updated if status in SR2 is 0.
-           Note: if we need to update both SR1 and SR2, the `CMD_WREN` needs to be sent again.
-        */
         esp_rom_spiflash_wait_idle(&g_rom_flashchip);
         bootloader_execute_flash_command(CMD_WREN, 0, 0, 0);
-        esp_rom_spiflash_wait_idle(&g_rom_flashchip);
-        bootloader_execute_flash_command(CMD_WRSR2, new_status_sr2, write_sr_bit, 0);
-        esp_rom_spiflash_wait_idle(&g_rom_flashchip);
+        bootloader_execute_flash_command(CMD_WRSR2, new_status_sr2, 8, 0);
+        status_written = true;
     }
 
-    bootloader_execute_flash_command(CMD_WRDI, 0, 0, 0);
-    esp_rom_spiflash_wait_idle(&g_rom_flashchip);
+    if (status_written) {
+        //Call esp_rom_spiflash_wait_idle to make sure previous WRSR is completed.
+        esp_rom_spiflash_wait_idle(&g_rom_flashchip);
+        bootloader_execute_flash_command(CMD_WRDI, 0, 0, 0);
+    }
+
     return err;
 }
 
@@ -568,7 +607,7 @@ esp_err_t IRAM_ATTR __attribute__((weak)) bootloader_flash_unlock(void)
 #ifndef g_rom_spiflash_dummy_len_plus // ESP32-C3 uses a macro to access ROM data here
 extern uint8_t g_rom_spiflash_dummy_len_plus[];
 #endif
-IRAM_ATTR static uint32_t bootloader_flash_execute_command_common(
+IRAM_ATTR uint32_t bootloader_flash_execute_command_common(
     uint8_t command,
     uint32_t addr_len, uint32_t address,
     uint8_t dummy_len,
@@ -598,14 +637,12 @@ IRAM_ATTR static uint32_t bootloader_flash_execute_command_common(
     SPIFLASH.addr = address;
 #endif
     //dummy phase
+    uint32_t total_dummy = dummy_len;
     if (miso_len > 0) {
-        uint32_t total_dummy = dummy_len + g_rom_spiflash_dummy_len_plus[1];
-        SPIFLASH.user.usr_dummy = total_dummy > 0;
-        SPIFLASH.user1.usr_dummy_cyclelen = total_dummy - 1;
-    } else {
-        SPIFLASH.user.usr_dummy = 0;
-        SPIFLASH.user1.usr_dummy_cyclelen = 0;
+        total_dummy += g_rom_spiflash_dummy_len_plus[1];
     }
+    SPIFLASH.user.usr_dummy = total_dummy > 0;
+    SPIFLASH.user1.usr_dummy_cyclelen = total_dummy - 1;
     //output data
     SPIFLASH.user.usr_mosi = mosi_len > 0;
 #if CONFIG_IDF_TARGET_ESP32
@@ -672,6 +709,12 @@ uint32_t IRAM_ATTR bootloader_read_flash_id(void)
     uint32_t id = bootloader_execute_flash_command(CMD_RDID, 0, 0, 24);
     id = ((id & 0xff) << 16) | ((id >> 16) & 0xff) | (id & 0xff00);
     return id;
+}
+
+void bootloader_spi_flash_reset(void)
+{
+    bootloader_execute_flash_command(0x66, 0, 0, 0);
+    bootloader_execute_flash_command(0x99, 0, 0, 0);
 }
 
 #if SOC_CACHE_SUPPORT_WRAP
@@ -806,3 +849,40 @@ esp_err_t IRAM_ATTR bootloader_flash_xmc_startup(void)
 }
 
 #endif //XMC_SUPPORT
+
+esp_rom_spiflash_read_mode_t bootloader_flash_get_spi_mode(void)
+{
+    esp_rom_spiflash_read_mode_t spi_mode = ESP_ROM_SPIFLASH_FASTRD_MODE;
+#if CONFIG_IDF_TARGET_ESP32
+    uint32_t spi_ctrl = REG_READ(SPI_CTRL_REG(0));
+    if (spi_ctrl & SPI_FREAD_QIO) {
+        spi_mode = ESP_ROM_SPIFLASH_QIO_MODE;
+    } else if (spi_ctrl & SPI_FREAD_QUAD) {
+        spi_mode = ESP_ROM_SPIFLASH_QOUT_MODE;
+    } else if (spi_ctrl & SPI_FREAD_DIO) {
+        spi_mode = ESP_ROM_SPIFLASH_DIO_MODE;
+    } else if (spi_ctrl & SPI_FREAD_DUAL) {
+        spi_mode = ESP_ROM_SPIFLASH_DOUT_MODE;
+    } else if (spi_ctrl & SPI_FASTRD_MODE) {
+        spi_mode = ESP_ROM_SPIFLASH_FASTRD_MODE;
+    } else {
+        spi_mode = ESP_ROM_SPIFLASH_SLOWRD_MODE;
+    }
+#else
+    uint32_t spi_ctrl = REG_READ(SPI_MEM_CTRL_REG(0));
+    if (spi_ctrl & SPI_MEM_FREAD_QIO) {
+        spi_mode = ESP_ROM_SPIFLASH_QIO_MODE;
+    } else if (spi_ctrl & SPI_MEM_FREAD_QUAD) {
+        spi_mode = ESP_ROM_SPIFLASH_QOUT_MODE;
+    } else if (spi_ctrl & SPI_MEM_FREAD_DIO) {
+        spi_mode = ESP_ROM_SPIFLASH_DIO_MODE;
+    } else if (spi_ctrl & SPI_MEM_FREAD_DUAL) {
+        spi_mode = ESP_ROM_SPIFLASH_DOUT_MODE;
+    } else if (spi_ctrl & SPI_MEM_FASTRD_MODE) {
+        spi_mode = ESP_ROM_SPIFLASH_FASTRD_MODE;
+    } else {
+        spi_mode = ESP_ROM_SPIFLASH_SLOWRD_MODE;
+    }
+#endif
+    return spi_mode;
+}

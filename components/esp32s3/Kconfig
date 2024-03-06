@@ -1,6 +1,59 @@
 menu "ESP32S3-Specific"
     visible if IDF_TARGET_ESP32S3
 
+    choice ESP32S3_REV_MIN
+        prompt "Minimum Supported ESP32-S3 Revision"
+        default ESP32S3_REV_MIN_0
+        help
+            Required minimum chip revision. ESP-IDF will check for it and
+            reject to boot if the chip revision fails the check.
+            This ensures the chip used will have some modifications (features, or bugfixes).
+
+            The complied binary will only support chips above this revision,
+            this will also help to reduce binary size.
+
+        config ESP32S3_REV_MIN_0
+            bool "Rev v0.0 (ECO0)"
+        config ESP32S3_REV_MIN_1
+            bool "Rev v0.1 (ECO1)"
+        config ESP32S3_REV_MIN_2
+            bool "Rev v0.2 (ECO2)"
+    endchoice
+
+    config ESP32S3_REV_MIN_FULL
+        int
+        default 0 if ESP32S3_REV_MIN_0
+        default 1 if ESP32S3_REV_MIN_1
+        default 2 if ESP32S3_REV_MIN_2
+
+    config ESP_REV_MIN_FULL
+        int
+        default ESP32S3_REV_MIN_FULL
+
+        #
+        # MAX Revision
+        #
+
+    choice ESP32S3_REV_MAX_FULL_STR
+        prompt "Maximum Supported ESP32-S3 Revision"
+        config ESP32S3_REV_MAX_FULL_STR_OPT
+            bool "Rev v0.99"
+    endchoice
+
+    # Maximum revision that IDF supports.
+    # It can not be changed by user.
+    # Only Espressif can change it when a new version will be supported in IDF.
+    # Supports all chips starting from ESP32S3_REV_MIN_FULL to ESP32S3_REV_MAX_FULL
+
+    config ESP32S3_REV_MAX_FULL
+        int
+        default 99
+        # keep in sync the "Maximum Supported Revision" description with this value
+
+    config ESP_REV_MAX_FULL
+        int
+        default ESP32S3_REV_MAX_FULL
+
     choice ESP32S3_DEFAULT_CPU_FREQ_MHZ
         prompt "CPU frequency"
         default ESP32S3_DEFAULT_CPU_FREQ_40 if IDF_ENV_FPGA
@@ -213,22 +266,14 @@ menu "ESP32S3-Specific"
             default 33554432 if SPIRAM_TYPE_ESPPSRAM256
             default 0
 
-        menu "PSRAM Clock and CS IO for ESP32S3"
-            depends on ESP32S3_SPIRAM_SUPPORT
-            config DEFAULT_PSRAM_CLK_IO
-                int "PSRAM CLK IO number"
-                range 0 33
-                default 30
-                help
-                    The PSRAM Clock IO can be any unused GPIO, please refer to your hardware design.
+        config SPIRAM_CLK_IO
+            int
+            default 30
 
-            config DEFAULT_PSRAM_CS_IO
-                int "PSRAM CS IO number"
-                range 0 33
-                default 26
-                help
-                    The PSRAM CS IO can be any unused GPIO, please refer to your hardware design.
-        endmenu
+        config SPIRAM_CS_IO
+            int
+            default 26
+
         config SPIRAM_FETCH_INSTRUCTIONS
             bool "Cache fetch instructions from SPI RAM"
             default n
@@ -244,6 +289,16 @@ menu "ESP32S3-Specific"
                 If SPIRAM_FETCH_INSTRUCTIONS is also enabled,
                 you can run the instruction when erasing or programming the flash.
 
+        config SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+            bool "Allow external memory as an argument to xTaskCreateStatic"
+            default n
+            help
+                Accessing memory in SPIRAM has certain restrictions, so task stacks allocated by xTaskCreate
+                are by default allocated from internal RAM.
+
+                This option allows for passing memory allocated from SPIRAM to be passed to xTaskCreateStatic.
+                This should only be used for tasks where the stack is never accessed while the cache is disabled.
+
         choice SPIRAM_SPEED
             prompt "Set RAM clock speed"
             default SPIRAM_SPEED_40M
@@ -252,7 +307,7 @@ menu "ESP32S3-Specific"
 
             config SPIRAM_SPEED_120M
                 depends on SPIRAM_MODE_QUAD
-                bool "120MHz clock speed"
+                bool "120MHz clock speed (READ DOCS FIRST)"
             config SPIRAM_SPEED_80M
                 bool "80MHz clock speed"
             config SPIRAM_SPEED_40M
@@ -320,6 +375,13 @@ menu "ESP32S3-Specific"
 
             Data is reserved at the beginning of RTC slow memory.
 
+    config ESP32S3_ULP_COPROC_RISCV
+        bool "Enable RISC-V as ULP coprocessor"
+        depends on ESP32S3_ULP_COPROC_ENABLED
+        default n
+        help
+            Set this to y to use the RISC-V coprocessor instead of the FSM-ULP.
+
     config ESP32S3_DEBUG_OCDAWARE
         bool "Make exception and panic handlers JTAG/OCD aware"
         default y
@@ -327,14 +389,6 @@ menu "ESP32S3-Specific"
         help
             The FreeRTOS panic and unhandled exception handers can detect a JTAG OCD debugger and
             instead of panicking, have the debugger stop on the offending instruction.
-
-    config ESP32S3_DEBUG_STUBS_ENABLE
-        bool "OpenOCD debug stubs"
-        default COMPILER_OPTIMIZATION_LEVEL_DEBUG
-        depends on !ESP32S3_TRAX
-        help
-            Debug stubs are used by OpenOCD to execute pre-compiled onboard code which does some useful debugging,
-            e.g. GCOV data dump.
 
     config ESP32S3_BROWNOUT_DET
         bool "Hardware brownout detect & reset"

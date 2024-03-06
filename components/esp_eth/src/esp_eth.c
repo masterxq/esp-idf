@@ -1,16 +1,8 @@
-// Copyright 2019-2021 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2019-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <sys/cdefs.h>
 #include <stdatomic.h>
@@ -51,7 +43,7 @@ typedef struct {
     uint32_t check_link_period_ms;
     eth_speed_t speed;
     eth_duplex_t duplex;
-    eth_link_t link;
+    _Atomic eth_link_t link;
     atomic_int ref_count;
     void *priv;
     _Atomic esp_eth_fsm_t fsm;
@@ -127,7 +119,7 @@ static esp_err_t eth_on_state_changed(esp_eth_mediator_t *eth, esp_eth_state_t s
     case ETH_STATE_LINK: {
         eth_link_t link = (eth_link_t)args;
         ESP_GOTO_ON_ERROR(mac->set_link(mac, link), err, TAG, "ethernet mac set link failed");
-        eth_driver->link = link;
+        atomic_store(&eth_driver->link, link);
         if (link == ETH_LINK_UP) {
             ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_CONNECTED, &eth_driver, sizeof(esp_eth_driver_t *), 0), err,
                               TAG, "send ETHERNET_EVENT_CONNECTED event failed");
@@ -199,7 +191,7 @@ esp_err_t esp_eth_driver_install(const esp_eth_config_t *config, esp_eth_handle_
     atomic_init(&eth_driver->fsm, ESP_ETH_FSM_STOP);
     eth_driver->mac = mac;
     eth_driver->phy = phy;
-    eth_driver->link = ETH_LINK_DOWN;
+    atomic_init(&eth_driver->link, ETH_LINK_DOWN);
     eth_driver->duplex = ETH_DUPLEX_HALF;
     eth_driver->speed = ETH_SPEED_10M;
     eth_driver->stack_input = config->stack_input;
@@ -270,13 +262,11 @@ esp_err_t esp_eth_start(esp_eth_handle_t hdl)
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
     ESP_GOTO_ON_FALSE(eth_driver, ESP_ERR_INVALID_ARG, err, TAG, "ethernet driver handle can't be null");
     esp_eth_phy_t *phy = eth_driver->phy;
-    esp_eth_mac_t *mac = eth_driver->mac;
     // check if driver has stopped
     esp_eth_fsm_t expected_fsm = ESP_ETH_FSM_STOP;
     ESP_GOTO_ON_FALSE(atomic_compare_exchange_strong(&eth_driver->fsm, &expected_fsm, ESP_ETH_FSM_START),
                       ESP_ERR_INVALID_STATE, err, TAG, "driver started already");
     ESP_GOTO_ON_ERROR(phy->negotiate(phy), err, TAG, "phy negotiation failed");
-    ESP_GOTO_ON_ERROR(mac->start(mac), err, TAG, "start mac failed");
     ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_START, &eth_driver, sizeof(esp_eth_driver_t *), 0),
                       err, TAG, "send ETHERNET_EVENT_START event failed");
     ESP_GOTO_ON_ERROR(phy->get_link(phy), err, TAG, "phy get link status failed");
@@ -297,7 +287,15 @@ esp_err_t esp_eth_stop(esp_eth_handle_t hdl)
     ESP_GOTO_ON_FALSE(atomic_compare_exchange_strong(&eth_driver->fsm, &expected_fsm, ESP_ETH_FSM_STOP),
                       ESP_ERR_INVALID_STATE, err, TAG, "driver not started yet");
     ESP_GOTO_ON_ERROR(esp_timer_stop(eth_driver->check_link_timer), err, TAG, "stop link timer failed");
-    ESP_GOTO_ON_ERROR(mac->stop(mac), err, TAG, "stop mac failed");
+
+    eth_link_t expected_link = ETH_LINK_UP;
+    if (atomic_compare_exchange_strong(&eth_driver->link, &expected_link, ETH_LINK_DOWN)){
+        // MAC is stopped by setting link down
+        ESP_GOTO_ON_ERROR(mac->set_link(mac, ETH_LINK_DOWN), err, TAG, "ethernet mac set link failed");
+        ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, &eth_driver, sizeof(esp_eth_driver_t *), 0), err,
+                            TAG, "send ETHERNET_EVENT_DISCONNECTED event failed");
+    }
+
     ESP_GOTO_ON_ERROR(esp_event_post(ETH_EVENT, ETHERNET_EVENT_STOP, &eth_driver, sizeof(esp_eth_driver_t *), 0),
                       err, TAG, "send ETHERNET_EVENT_STOP event failed");
 err:
@@ -323,9 +321,9 @@ esp_err_t esp_eth_transmit(esp_eth_handle_t hdl, void *buf, size_t length)
     esp_err_t ret = ESP_OK;
     esp_eth_driver_t *eth_driver = (esp_eth_driver_t *)hdl;
 
-    if (atomic_load(&eth_driver->fsm) != ESP_ETH_FSM_START) {
+    if (atomic_load(&eth_driver->link) != ETH_LINK_UP) {
         ret = ESP_ERR_INVALID_STATE;
-        ESP_LOGD(TAG, "Ethernet is not started");
+        ESP_LOGD(TAG, "Ethernet link is not up, can't transmit");
         goto err;
     }
 

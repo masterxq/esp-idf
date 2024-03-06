@@ -19,6 +19,8 @@
 #include "provisioner_prov.h"
 #include "provisioner_main.h"
 
+#define PROV_SVC_ADV_RX_CHECK(pre, cur)   ((cur) < (pre) ? ((cur) + (UINT32_MAX - (pre)) >= 200) : ((cur) - (pre) >= 200))
+
 #if CONFIG_BLE_MESH_PROVISIONER
 
 _Static_assert(BLE_MESH_MAX_CONN >= CONFIG_BLE_MESH_PBG_SAME_TIME,
@@ -74,6 +76,7 @@ _Static_assert(BLE_MESH_MAX_CONN >= CONFIG_BLE_MESH_PBG_SAME_TIME,
 
 #define START_PAYLOAD_MAX      20
 #define CONT_PAYLOAD_MAX       23
+#define START_LAST_SEG_MAX     2
 
 #define START_LAST_SEG(gpc)    (gpc >> 2)
 #define CONT_SEG_INDEX(gpc)    (gpc >> 2)
@@ -1317,8 +1320,8 @@ static void reset_link(const uint8_t idx, uint8_t reason)
 
 #if defined(CONFIG_BLE_MESH_USE_DUPLICATE_SCAN)
     /* Remove the link id from exceptional list */
-    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_REMOVE,
-                                    BLE_MESH_EXCEP_INFO_MESH_LINK_ID, &link[idx].link_id);
+    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_SUB_CODE_REMOVE,
+                                    BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID, &link[idx].link_id);
 #endif
 
     /* Clear everything except the retransmit delayed work config */
@@ -1477,8 +1480,8 @@ static void send_link_open(const uint8_t idx)
 
 #if defined(CONFIG_BLE_MESH_USE_DUPLICATE_SCAN)
     /* Add the link id into exceptional list */
-    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_ADD,
-                                    BLE_MESH_EXCEP_INFO_MESH_LINK_ID, &link[idx].link_id);
+    bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_SUB_CODE_ADD,
+                                    BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID, &link[idx].link_id);
 #endif
 
     bearer_ctl_send(idx, LINK_OPEN, link[idx].uuid, 16);
@@ -2724,7 +2727,8 @@ static void prov_retransmit(struct k_work *work)
 #endif
     if (k_uptime_get() - link[idx].tx.start > timeout) {
         BT_WARN("Provisioner timeout, giving up transaction");
-        reset_link(idx, CLOSE_REASON_TIMEOUT);
+        /* Provisioner should send Link Close here */
+        close_link(idx, CLOSE_REASON_TIMEOUT);
         return;
     }
 
@@ -2865,6 +2869,12 @@ static void prov_msg_recv(const uint8_t idx)
     return;
 
 fail:
+    /**
+     * For the case MESH/PVNR/PROV/BV-10-C and MESH/PVNR/PROV/BI-14-C,
+     * provisioner should send transaction ack before closing the link.
+     */
+    gen_prov_ack_send(idx, link[idx].rx.trans_id);
+
     close_link(idx, CLOSE_REASON_FAILED);
     return;
 }
@@ -2942,6 +2952,12 @@ static void gen_prov_ack(const uint8_t idx, struct prov_rx *rx, struct net_buf_s
         case PROV_START:
             pub_key_oob = link[idx].conf_inputs[13];
             send_pub_key(idx, pub_key_oob);
+            /* For case MESH/PVNR/PROV/BV-04-C, if using OOB public key,
+             * the value of expect_ack_for shall be PROV_PUB_KEY.
+             */
+            if (pub_key_oob) {
+                return;
+            }
             break;
         case PROV_PUB_KEY:
             prov_gen_dh_key(idx);
@@ -2976,6 +2992,12 @@ static void gen_prov_start(const uint8_t idx, struct prov_rx *rx, struct net_buf
     /* Provisioner can not receive zero-length provisioning pdu */
     if (link[idx].rx.buf->len < 1) {
         BT_ERR("Ignoring zero-length provisioning PDU");
+        close_link(idx, CLOSE_REASON_FAILED);
+        return;
+    }
+
+    if (START_LAST_SEG(rx->gpc) > START_LAST_SEG_MAX) {
+        BT_ERR("Invalid SegN 0x%02x", START_LAST_SEG(rx->gpc));
         close_link(idx, CLOSE_REASON_FAILED);
         return;
     }
@@ -3325,8 +3347,8 @@ int bt_mesh_provisioner_prov_reset(bool erase)
 #if CONFIG_BLE_MESH_PB_ADV
             prov_clear_tx(i);
 #if CONFIG_BLE_MESH_USE_DUPLICATE_SCAN
-            bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_REMOVE,
-                BLE_MESH_EXCEP_INFO_MESH_LINK_ID, &link[i].link_id);
+            bt_mesh_update_exceptional_list(BLE_MESH_EXCEP_LIST_SUB_CODE_REMOVE,
+                BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID, &link[i].link_id);
 #endif
             memset(&link[i], 0, offsetof(struct prov_link, tx.retransmit));
             link[i].pending_ack = XACT_NVAL;
@@ -3406,6 +3428,21 @@ int bt_mesh_provisioner_prov_deinit(bool erase)
 }
 #endif /* CONFIG_BLE_MESH_DEINIT */
 
+static bool bt_mesh_prov_svc_adv_filter(void)
+{
+    static uint32_t timestamp = 0;
+    static uint32_t pre_timestamp = 0;
+
+    timestamp = k_uptime_get_32();
+
+    if (PROV_SVC_ADV_RX_CHECK(pre_timestamp, timestamp)) {
+        pre_timestamp = timestamp;
+        return false;
+    }
+
+    return true;
+}
+
 static bool is_unprov_dev_info_callback_to_app(bt_mesh_prov_bearer_t bearer, const uint8_t uuid[16],
                                                const bt_mesh_addr_t *addr, uint16_t oob_info, int8_t rssi)
 {
@@ -3423,6 +3460,11 @@ static bool is_unprov_dev_info_callback_to_app(bt_mesh_prov_bearer_t bearer, con
 
         if (i == ARRAY_SIZE(unprov_dev)) {
             BT_DBG("Device not in queue, notify to app layer");
+
+            if (adv_type == BLE_MESH_ADV_IND && bt_mesh_prov_svc_adv_filter()) {
+                return true;
+            }
+
             if (notify_unprov_adv_pkt_cb) {
                 notify_unprov_adv_pkt_cb(addr->val, addr->type, adv_type, uuid, oob_info, bearer, rssi);
             }

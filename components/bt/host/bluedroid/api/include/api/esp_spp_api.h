@@ -1,16 +1,8 @@
-// Copyright 2015-2016 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #ifndef __ESP_SPP_API_H__
 #define __ESP_SPP_API_H__
@@ -35,10 +27,18 @@ typedef enum {
 } esp_spp_status_t;
 
 /* Security Setting Mask
-Use these three mask mode:
+Use these three mask modes on both sides:
 1. ESP_SPP_SEC_NONE
 2. ESP_SPP_SEC_AUTHENTICATE
-3. (ESP_SPP_SEC_ENCRYPT|ESP_SPP_SEC_AUTHENTICATE)
+3. (ESP_SPP_SEC_AUTHENTICATE | ESP_SPP_SEC_ENCRYPT)
+Use these three mask modes only on acceptor side:
+1. ESP_SPP_SEC_IN_16_DIGITS
+2. (ESP_SPP_SEC_IN_16_DIGITS | ESP_SPP_SEC_AUTHENTICATE)
+3. (ESP_SPP_SEC_IN_16_DIGITS | ESP_SPP_SEC_AUTHENTICATE | ESP_SPP_SEC_ENCRYPT)
+Due to certain limitations, do not use these mask modes:
+1. ESP_SPP_SEC_AUTHORIZE
+2. ESP_SPP_SEC_MODE4_LEVEL4
+3. ESP_SPP_SEC_MITM
 */
 #define ESP_SPP_SEC_NONE            0x0000    /*!< No security. relate to BTA_SEC_NONE in bta/bta_api.h */
 #define ESP_SPP_SEC_AUTHORIZE       0x0001    /*!< Authorization required (only needed for out going connection ) relate to BTA_SEC_AUTHORIZE in bta/bta_api.h*/
@@ -77,6 +77,8 @@ typedef enum {
     ESP_SPP_WRITE_EVT                   = 33,               /*!< When SPP write operation completes, the event comes, only for ESP_SPP_MODE_CB */
     ESP_SPP_SRV_OPEN_EVT                = 34,               /*!< When SPP Server connection open, the event comes */
     ESP_SPP_SRV_STOP_EVT                = 35,               /*!< When SPP server stopped, the event comes */
+    ESP_SPP_VFS_REGISTER_EVT            = 36,               /*!< When SPP VFS register, the event comes */
+    ESP_SPP_VFS_UNREGISTER_EVT          = 37,               /*!< When SPP VFS unregister, the event comes */
 } esp_spp_cb_event_t;
 
 
@@ -195,6 +197,20 @@ typedef union {
         uint32_t            handle;         /*!< The connection handle */
         bool                cong;           /*!< TRUE, congested. FALSE, uncongested */
     } cong;                                 /*!< SPP callback param of ESP_SPP_CONG_EVT */
+
+    /**
+     * @brief ESP_SPP_VFS_REGISTER_EVT
+     */
+    struct spp_vfs_register_evt_param {
+        esp_spp_status_t    status;         /*!< status */
+    } vfs_register;                         /*!< SPP callback param of ESP_SPP_VFS_REGISTER_EVT */
+
+    /**
+     * @brief ESP_SPP_VFS_UNREGISTER_EVT
+     */
+    struct spp_vfs_unregister_evt_param {
+        esp_spp_status_t    status;         /*!< status */
+    } vfs_unregister;                       /*!< SPP callback param of ESP_SPP_VFS_UNREGISTER_EVT */
 } esp_spp_cb_param_t;                       /*!< SPP callback parameter union type */
 
 /**
@@ -205,7 +221,7 @@ typedef union {
  * @param       event:      Event type
  * @param       param:      Point to callback parameter, currently is union type
  */
-typedef void (esp_spp_cb_t)(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
+typedef void (*esp_spp_cb_t)(esp_spp_cb_event_t event, esp_spp_cb_param_t *param);
 
 /**
  * @brief       This function is called to init callbacks with SPP module.
@@ -358,12 +374,25 @@ esp_err_t esp_spp_write(uint32_t handle, int len, uint8_t *p_data);
 /**
  * @brief       This function is used to register VFS.
  *              For now, SPP only supports write, read and close.
+ *              When the operation is completed, the callback function will be called with ESP_SPP_VFS_REGISTER_EVT.
+ *              This function must be called after esp_spp_init()/esp_spp_enhanced_init() successful and before esp_spp_deinit().
  *
  * @return
  *              - ESP_OK: success
  *              - other: failed
  */
 esp_err_t esp_spp_vfs_register(void);
+
+/**
+ * @brief       This function is used to unregister VFS.
+ *              When the operation is completed, the callback function will be called with ESP_SPP_VFS_UNREGISTER_EVT.
+ *              This function must be called after esp_spp_vfs_register() successful and before esp_spp_deinit().
+ *
+ * @return
+ *              - ESP_OK: success
+ *              - other: failed
+ */
+esp_err_t esp_spp_vfs_unregister(void);
 
 #ifdef __cplusplus
 }

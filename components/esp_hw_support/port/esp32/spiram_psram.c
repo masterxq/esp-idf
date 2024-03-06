@@ -24,7 +24,10 @@
 #include "soc/dport_reg.h"
 #include "soc/efuse_periph.h"
 #include "soc/soc_caps.h"
+#include "soc/chip_revision.h"
 #include "driver/gpio.h"
+#include "hal/efuse_hal.h"
+#include "hal/efuse_ll.h"
 #include "hal/gpio_hal.h"
 #include "driver/spi_common_internal.h"
 #include "driver/periph_ctrl.h"
@@ -111,12 +114,28 @@ typedef enum {
 #define D2WD_PSRAM_CLK_IO          CONFIG_D2WD_PSRAM_CLK_IO  // Default value is 9
 #define D2WD_PSRAM_CS_IO           CONFIG_D2WD_PSRAM_CS_IO   // Default value is 10
 
+// There is no reason to change the pin of an embedded psram.
+// So define the number of pin directly, instead of configurable.
+#define D0WDR2_V3_PSRAM_CLK_IO    6
+#define D0WDR2_V3_PSRAM_CS_IO     16
+
 // For ESP32-PICO chip, the psram share clock with flash. The flash clock pin is fixed, which is IO6.
 #define PICO_PSRAM_CLK_IO          6
 #define PICO_PSRAM_CS_IO           CONFIG_PICO_PSRAM_CS_IO   // Default value is 10
 
 #define PICO_V3_02_PSRAM_CLK_IO    10
 #define PICO_V3_02_PSRAM_CS_IO     9
+
+#if CONFIG_SPIRAM_SPEED_40M && CONFIG_ESPTOOLPY_FLASHFREQ_40M
+#define PSRAM_CS_HOLD_TIME    0
+#elif CONFIG_SPIRAM_SPEED_40M && CONFIG_ESPTOOLPY_FLASHFREQ_80M
+#define PSRAM_CS_HOLD_TIME    0
+#elif CONFIG_SPIRAM_SPEED_80M && CONFIG_ESPTOOLPY_FLASHFREQ_80M
+#define PSRAM_CS_HOLD_TIME    1
+#else
+#error "FLASH speed can only be equal to or higher than SRAM speed while SRAM is enabled!"
+#endif
+
 
 typedef struct {
     uint8_t flash_clk_io;
@@ -654,7 +673,7 @@ void psram_set_cs_timing(psram_spi_num_t spi_num, psram_clk_mode_t clk_mode)
     if (clk_mode == PSRAM_CLK_MODE_NORM) {
         SET_PERI_REG_MASK(SPI_USER_REG(spi_num), SPI_CS_HOLD_M | SPI_CS_SETUP_M);
         // Set cs time.
-        SET_PERI_REG_BITS(SPI_CTRL2_REG(spi_num), SPI_HOLD_TIME_V, 1, SPI_HOLD_TIME_S);
+        SET_PERI_REG_BITS(SPI_CTRL2_REG(spi_num), SPI_HOLD_TIME_V, PSRAM_CS_HOLD_TIME, SPI_HOLD_TIME_S);
         SET_PERI_REG_BITS(SPI_CTRL2_REG(spi_num), SPI_SETUP_TIME_V, 0, SPI_SETUP_TIME_S);
     } else {
         CLEAR_PERI_REG_MASK(SPI_USER_REG(spi_num), SPI_CS_HOLD_M | SPI_CS_SETUP_M);
@@ -805,7 +824,7 @@ bool psram_is_32mbit_ver0(void)
 esp_err_t IRAM_ATTR psram_enable(psram_cache_mode_t mode, psram_vaddr_mode_t vaddrmode)   //psram init
 {
     psram_io_t psram_io={0};
-    uint32_t pkg_ver = esp_efuse_get_pkg_ver();
+    uint32_t pkg_ver = efuse_ll_get_chip_ver_pkg();
     if (pkg_ver == EFUSE_RD_CHIP_VER_PKG_ESP32D2WDQ5) {
         ESP_EARLY_LOGI(TAG, "This chip is ESP32-D2WD");
         rtc_vddsdio_config_t cfg = rtc_vddsdio_get_config();
@@ -815,7 +834,7 @@ esp_err_t IRAM_ATTR psram_enable(psram_cache_mode_t mode, psram_vaddr_mode_t vad
         }
         psram_io.psram_clk_io = D2WD_PSRAM_CLK_IO;
         psram_io.psram_cs_io  = D2WD_PSRAM_CS_IO;
-    } else if (pkg_ver == EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4 && esp_efuse_get_chip_ver() >= 3) {
+    } else if (pkg_ver == EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4 && ESP_CHIP_REV_ABOVE(efuse_hal_chip_revision(), 300)) {
         ESP_EARLY_LOGE(TAG, "This chip is ESP32-PICO-V3. It does not support PSRAM (disable it in Kconfig)");
         abort();
     } else if ((pkg_ver == EFUSE_RD_CHIP_VER_PKG_ESP32PICOD2) || (pkg_ver == EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4)) {
@@ -842,6 +861,16 @@ esp_err_t IRAM_ATTR psram_enable(psram_cache_mode_t mode, psram_vaddr_mode_t vad
         ESP_EARLY_LOGI(TAG, "This chip is ESP32-D0WD");
         psram_io.psram_clk_io = D0WD_PSRAM_CLK_IO;
         psram_io.psram_cs_io  = D0WD_PSRAM_CS_IO;
+    } else if (pkg_ver == EFUSE_RD_CHIP_VER_PKG_ESP32D0WDR2V3){
+        ESP_EARLY_LOGI(TAG, "This chip is ESP32-D0WDR2-V3");
+        rtc_vddsdio_config_t cfg = rtc_vddsdio_get_config();
+        if (cfg.tieh != RTC_VDDSDIO_TIEH_3_3V) {
+            ESP_EARLY_LOGE(TAG, "VDDSDIO is not 3.3V");
+            return ESP_FAIL;
+        }
+        s_clk_mode = PSRAM_CLK_MODE_NORM;
+        psram_io.psram_clk_io = D0WDR2_V3_PSRAM_CLK_IO;
+        psram_io.psram_cs_io  = D0WDR2_V3_PSRAM_CS_IO;
     } else {
         ESP_EARLY_LOGE(TAG, "Not a valid or known package id: %d", pkg_ver);
         abort();

@@ -18,7 +18,6 @@ if(CONFIG_ESP32_WIFI_ENABLED)
 
     set(srcs
         "src/coexist.c"
-        "src/lib_printf.c"
         "src/mesh_event.c"
         "src/smartconfig.c"
         "src/smartconfig_ack.c"
@@ -52,5 +51,9 @@ if(CONFIG_ESP32_WIFI_ENABLED)
             set_property(TARGET ${blob} APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${blob_reqs})
             target_link_libraries(${COMPONENT_LIB} PUBLIC ${blob})
         endforeach()
+
+        if(CONFIG_ESP32_WIFI_SW_COEXIST_ENABLE AND CONFIG_IDF_TARGET_ESP32)
+            target_link_libraries(${COMPONENT_LIB} PRIVATE btdm_app)
+        endif()
     endif()
 endif()

@@ -619,9 +619,10 @@ esp_err_t esp_netif_dhcps_stop(esp_netif_t *esp_netif);
  *
  *   If DHCP server is enabled, the Main DNS Server setting is used by the DHCP server to provide a DNS Server option
  *   to DHCP clients (Wi-Fi stations).
- *   - The default Main DNS server is typically the IP of the Wi-Fi AP interface itself.
+ *   - The default Main DNS server is typically the IP of the DHCP server itself.
  *   - This function can override it by setting server type ESP_NETIF_DNS_MAIN.
- *   - Other DNS Server types are not supported for the Wi-Fi AP interface.
+ *   - Other DNS Server types are not supported for the DHCP server.
+ *   - To propagate the DNS info to client, please stop the DHCP server before using this API.
  *
  * @param[in]  esp_netif Handle to esp-netif instance
  * @param[in]  type Type of DNS Server to set: ESP_NETIF_DNS_MAIN, ESP_NETIF_DNS_BACKUP, ESP_NETIF_DNS_FALLBACK
@@ -904,6 +905,27 @@ void esp_netif_netstack_buf_ref(void *netstack_buf);
  *
  */
 void esp_netif_netstack_buf_free(void *netstack_buf);
+
+/**
+ * @}
+ */
+
+/** @addtogroup ESP_NETIF_TCPIP_EXEC
+ * @{
+ */
+
+/**
+ * @brief  TCPIP thread safe callback used with esp_netif_tcpip_exec()
+ */
+typedef esp_err_t (*esp_netif_callback_fn)(void *ctx);
+
+/**
+ * @brief Utility to execute the supplied callback in TCP/IP context
+ * @param fn Pointer to the callback
+ * @param ctx Parameter to the callback
+ * @return The error code (esp_err_t) returned by the callback
+ */
+esp_err_t esp_netif_tcpip_exec(esp_netif_callback_fn fn, void *ctx);
 
 /**
  * @}

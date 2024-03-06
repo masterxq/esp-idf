@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 import fnmatch
 import locale
 import os
@@ -14,7 +16,7 @@ from idf_py_actions.constants import GENERATORS, PREVIEW_TARGETS, SUPPORTED_TARG
 from idf_py_actions.errors import FatalError
 from idf_py_actions.global_options import global_options
 from idf_py_actions.tools import (TargetChoice, ensure_build_directory, get_target, idf_version, merge_action_lists,
-                                  realpath, run_target)
+                                  run_target)
 
 
 def action_extensions(base_actions, project_path):
@@ -69,6 +71,10 @@ def action_extensions(base_actions, project_path):
             subprocess.check_output(GENERATORS[args.generator]['dry_run'] + [target_name], cwd=args.build_dir)
 
         except Exception:
+            if target_name in ['clang-check', 'clang-html-report']:
+                raise FatalError('command "{}" requires an additional plugin "pyclang". '
+                                 'Please install it via "pip install --upgrade pyclang"'.format(target_name))
+
             raise FatalError(
                 'command "%s" is not known to idf.py and is not a %s target' % (target_name, args.generator))
 
@@ -178,14 +184,14 @@ def action_extensions(base_actions, project_path):
         ensure_build_directory(args, ctx.info_name, True)
 
     def validate_root_options(ctx, args, tasks):
-        args.project_dir = realpath(args.project_dir)
-        if args.build_dir is not None and args.project_dir == realpath(args.build_dir):
+        args.project_dir = os.path.realpath(args.project_dir)
+        if args.build_dir is not None and args.project_dir == os.path.realpath(args.build_dir):
             raise FatalError(
                 'Setting the build directory to the project directory is not supported. Suggest dropping '
                 "--build-dir option, the default is a 'build' subdirectory inside the project directory.")
         if args.build_dir is None:
             args.build_dir = os.path.join(args.project_dir, 'build')
-        args.build_dir = realpath(args.build_dir)
+        args.build_dir = os.path.realpath(args.build_dir)
 
     def idf_version_callback(ctx, param, value):
         if not value or ctx.resilient_parsing:
@@ -449,28 +455,6 @@ def action_extensions(base_actions, project_path):
                 'hidden': True,
                 'help': 'Build only partition table.',
                 'order_dependencies': ['reconfigure'],
-                'options': global_options,
-            },
-            'erase_otadata': {
-                'callback': build_target,
-                'hidden': True,
-                'help': 'Erase otadata partition.',
-                'options': global_options,
-            },
-            'erase-otadata': {
-                'callback': build_target,
-                'help': 'Erase otadata partition. Deprecated alias: "erase_otadata".',
-                'options': global_options,
-            },
-            'read_otadata': {
-                'callback': build_target,
-                'hidden': True,
-                'help': 'Read otadata partition.',
-                'options': global_options,
-            },
-            'read-otadata': {
-                'callback': build_target,
-                'help': 'Read otadata partition. Deprecated alias: "read_otadata".',
                 'options': global_options,
             },
             'build-system-targets': {

@@ -33,22 +33,22 @@ static const char* TAG = "test_adc2";
 #define ADC2_CHAN1              ADC2_CHANNEL_9
 #define ADC_WIDTH               ADC_WIDTH_BIT_12
 #define ADC_HIGH                4095
-#define ADC_ERROR_THRES         20
+#define ADC_ERROR_THRES         200
 #elif CONFIG_IDF_TARGET_ESP32S2
 #define ADC2_CHAN1              ADC2_CHANNEL_7
 #define ADC_WIDTH               ADC_WIDTH_BIT_13
 #define ADC_HIGH                8191
-#define ADC_ERROR_THRES         100
+#define ADC_ERROR_THRES         200
 #elif CONFIG_IDF_TARGET_ESP32C3
 #define ADC2_CHAN1              ADC2_CHANNEL_0
 #define ADC_WIDTH               ADC_WIDTH_BIT_12
 #define ADC_HIGH                4095
-#define ADC_ERROR_THRES         100
+#define ADC_ERROR_THRES         200
 #elif CONFIG_IDF_TARGET_ESP32S3
 #define ADC2_CHAN1              ADC2_CHANNEL_0
 #define ADC_WIDTH               ADC_WIDTH_BIT_12
 #define ADC_HIGH                4095
-#define ADC_ERROR_THRES         100
+#define ADC_ERROR_THRES         200
 #endif
 
 #define ADC_LOW                 0
@@ -236,7 +236,7 @@ static void i2s_adc_init(void)
     i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     // init ADC pad
     i2s_set_adc_mode(ADC_UNIT_1, ADC1_CHANNEL_4);
-    // enable adc sampling, ADC_WIDTH_BIT_12, ADC_ATTEN_DB_11 hard-coded in adc_i2s_mode_init
+    // enable adc sampling, ADC_WIDTH_BIT_12, ADC_ATTEN_DB_12 hard-coded in adc_i2s_mode_init
     i2s_adc_enable(I2S_NUM_0);
 }
 

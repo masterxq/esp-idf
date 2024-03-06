@@ -75,6 +75,7 @@ enum {
     BTA_HF_CLIENT_SEND_AT_CMD,
 #if (BTM_SCO_HCI_INCLUDED == TRUE)
     BTA_HF_CLIENT_CI_SCO_DATA,
+    BTA_HF_CLIENT_PKT_STAT_NUMS,
 #endif
     BTA_HF_CLIENT_NUM_ACTIONS,
 };
@@ -111,8 +112,9 @@ const tBTA_HF_CLIENT_ACTION bta_hf_client_action[] = {
     /* BTA_HF_CLIENT_DISC_ACP_RES */  bta_hf_client_disc_acp_res,
     /* BTA_HF_CLIENT_SVC_CONN_OPEN */ bta_hf_client_svc_conn_open,
     /* BTA_HF_CLIENT_SEND_AT_CMD */   bta_hf_client_send_at_cmd,
-#if (BTM_SCO_HCI_INCLUDED == TRUE )
+#if (BTM_SCO_HCI_INCLUDED == TRUE)
     /* BTA_HF_CLIENT_CI_SCO_DATA */   bta_hf_client_ci_sco_data,
+    /* BTA_HF_CLIENT_PKT_STAT_NUMS */ bta_hf_client_pkt_stat_nums,
 #endif /* (BTM_SCO_HCI_INCLUDED == TRUE ) */
 };
 
@@ -143,6 +145,7 @@ const UINT8 bta_hf_client_st_init[][BTA_HF_CLIENT_NUM_COLS] = {
     /* SEND_AT_CMD_EVT */       {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_INIT_ST},
 #if (BTM_SCO_HCI_INCLUDED == TRUE )
     /* CI_SCO_DATA_EVT */       {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_INIT_ST},
+    /* PKT_STAT_NUMS_GET_EVT */ {BTA_HF_CLIENT_PKT_STAT_NUMS,  BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_INIT_ST},
 #endif /* (BTM_SCO_HCI_INCLUDED == TRUE ) */
 };
 
@@ -166,8 +169,9 @@ const UINT8 bta_hf_client_st_opening[][BTA_HF_CLIENT_NUM_COLS] = {
     /* SCO_OPEN_EVT */          {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPENING_ST},
     /* SCO_CLOSE_EVT */         {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPENING_ST},
     /* SEND_AT_CMD_EVT */       {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPENING_ST},
-#if (BTM_SCO_HCI_INCLUDED == TRUE )
+#if (BTM_SCO_HCI_INCLUDED == TRUE)
     /* CI_SCO_DATA_EVT */       {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPENING_ST},
+    /* PKT_STAT_NUMS_GET_EVT */ {BTA_HF_CLIENT_PKT_STAT_NUMS,  BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPENING_ST},
 #endif /* (BTM_SCO_HCI_INCLUDED == TRUE ) */
 };
 
@@ -193,6 +197,7 @@ const UINT8 bta_hf_client_st_open[][BTA_HF_CLIENT_NUM_COLS] = {
     /* SEND_AT_CMD_EVT */       {BTA_HF_CLIENT_SEND_AT_CMD,    BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPEN_ST},
 #if (BTM_SCO_HCI_INCLUDED == TRUE )
     /* CI_SCO_DATA_EVT */       {BTA_HF_CLIENT_CI_SCO_DATA,    BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPEN_ST},
+    /* PKT_STAT_NUMS_GET_EVT */ {BTA_HF_CLIENT_PKT_STAT_NUMS,  BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_OPEN_ST},
 #endif /* (BTM_SCO_HCI_INCLUDED == TRUE ) */
 };
 
@@ -218,6 +223,7 @@ const UINT8 bta_hf_client_st_closing[][BTA_HF_CLIENT_NUM_COLS] = {
     /* SEND_AT_CMD_EVT */       {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_CLOSING_ST},
 #if (BTM_SCO_HCI_INCLUDED == TRUE )
     /* CI_SCO_DATA_EVT */       {BTA_HF_CLIENT_IGNORE,         BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_CLOSING_ST},
+    /* PKT_STAT_NUMS_GET_EVT */ {BTA_HF_CLIENT_PKT_STAT_NUMS,  BTA_HF_CLIENT_IGNORE,          BTA_HF_CLIENT_CLOSING_ST},
 #endif /* (BTM_SCO_HCI_INCLUDED == TRUE ) */
 };
 
@@ -232,7 +238,7 @@ const tBTA_HF_CLIENT_ST_TBL bta_hf_client_st_tbl[] = {
     bta_hf_client_st_closing
 };
 
-const char *bta_hf_client_version = "1.6";
+const int bta_hf_client_version = HFP_HF_VERSION_1_7;
 
 /* HF Client control block */
 #if BTA_DYNAMIC_MEMORY == FALSE
@@ -387,7 +393,7 @@ static void bta_hf_client_api_enable(tBTA_HF_CLIENT_DATA *p_data)
     bta_hf_client_cb.p_cback = p_data->api_enable.p_cback;
 
     /* check if mSBC support enabled */
-    if (strcmp(bta_hf_client_version, "1.6") == 0) {
+    if (bta_hf_client_version >= HFP_HF_VERSION_1_6) {
         bta_hf_client_cb.msbc_enabled = TRUE;
     } else{
         bta_hf_client_cb.msbc_enabled = FALSE;
@@ -640,6 +646,7 @@ static char *bta_hf_client_evt_str(UINT16 event)
         CASE_RETURN_STR(BTA_HF_CLIENT_SCO_OPEN_EVT)
         CASE_RETURN_STR(BTA_HF_CLIENT_SCO_CLOSE_EVT)
         CASE_RETURN_STR(BTA_HF_CLIENT_SEND_AT_CMD_EVT)
+        CASE_RETURN_STR(BTA_HF_CLIENT_PKT_NUMS_GET_EVT)
     default:
         return "Unknown HF Client Event";
     }

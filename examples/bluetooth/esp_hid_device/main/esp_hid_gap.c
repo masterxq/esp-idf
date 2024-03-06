@@ -418,9 +418,12 @@ static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_para
 static esp_err_t init_bt_gap(void)
 {
     esp_err_t ret;
+#if (CONFIG_BT_SSP_ENABLED)
+    /* Set default parameters for Secure Simple Pairing */
     esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
     esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
     esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+#endif
     /*
      * Set default parameters for Legacy Pairing
      * Use fixed pin code
@@ -461,7 +464,7 @@ static esp_err_t start_bt_scan(uint32_t seconds)
 /*
  * BLE GAP
  * */
-
+extern void ble_hid_task_start_up(void);
 static void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     switch (event) {
@@ -510,10 +513,12 @@ static void ble_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_p
      * */
     case ESP_GAP_BLE_AUTH_CMPL_EVT:
         if (!param->ble_security.auth_cmpl.success) {
+            // if AUTH ERROR,hid maybe don't work.
             ESP_LOGE(TAG, "BLE GAP AUTH ERROR: 0x%x", param->ble_security.auth_cmpl.fail_reason);
         } else {
             ESP_LOGI(TAG, "BLE GAP AUTH SUCCESS");
         }
+        ble_hid_task_start_up();
         break;
 
     case ESP_GAP_BLE_KEY_EVT: //shows the ble key info share with peer device to the user.

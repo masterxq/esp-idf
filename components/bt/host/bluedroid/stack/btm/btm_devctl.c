@@ -662,14 +662,13 @@ tBTM_DEV_STATUS_CB *BTM_RegisterForDeviceStatusNotif (tBTM_DEV_STATUS_CB *p_cb)
 tBTM_STATUS BTM_VendorSpecificCommand(UINT16 opcode, UINT8 param_len,
                                       UINT8 *p_param_buf, tBTM_VSC_CMPL_CB *p_cb)
 {
-    void *p_buf;
+    BT_HDR *p_buf;
 
     BTM_TRACE_EVENT ("BTM: BTM_VendorSpecificCommand: Opcode: 0x%04X, ParamLen: %i.",
                      opcode, param_len);
 
     /* Allocate a buffer to hold HCI command plus the callback function */
-    if ((p_buf = osi_malloc((UINT16)(sizeof(BT_HDR) + sizeof (tBTM_CMPL_CB *) +
-                                     param_len + HCIC_PREAMBLE_SIZE))) != NULL) {
+    if ((p_buf = HCI_GET_CMD_BUF(param_len)) != NULL) {
         /* Send the HCI command (opcode will be OR'd with HCI_GRP_VENDOR_SPECIFIC) */
         btsnd_hcic_vendor_spec_cmd (p_buf, opcode, param_len, p_param_buf, (void *)p_cb);
 
@@ -712,6 +711,14 @@ void btm_vsc_complete (UINT8 *p, UINT16 opcode, UINT16 evt_len,
             STREAM_TO_UINT32(length, p);
             if(ble_cb && ble_cb->update_exceptional_list_cmp_cb) {
                 (*ble_cb->update_exceptional_list_cmp_cb)(status, subcode, length, p);
+            }
+            break;
+        }
+        case HCI_VENDOR_BLE_CLEAR_ADV: {
+            uint8_t status;
+            STREAM_TO_UINT8(status, p);
+            if (ble_cb && ble_cb->inq_var.p_clear_adv_cb) {
+                ble_cb->inq_var.p_clear_adv_cb(status);
             }
             break;
         }

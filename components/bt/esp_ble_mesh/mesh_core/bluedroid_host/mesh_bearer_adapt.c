@@ -99,6 +99,11 @@ int bt_mesh_host_init(void)
     return 0;
 }
 
+int bt_mesh_host_deinit(void)
+{
+    return 0;
+}
+
 void bt_mesh_hci_init(void)
 {
     const uint8_t *features = controller_get_interface()->get_features_ble()->as_array;
@@ -316,6 +321,7 @@ int bt_le_adv_start(const struct bt_mesh_adv_param *param,
     tBLE_ADDR_TYPE addr_type_own = 0U;
     tBLE_BD_ADDR p_dir_bda = {0};
     tBTM_BLE_AFP adv_fil_pol = 0U;
+    uint16_t interval = 0U;
     uint8_t adv_type = 0U;
     int err = 0;
 
@@ -365,9 +371,24 @@ int bt_le_adv_start(const struct bt_mesh_adv_param *param,
     adv_fil_pol = BLE_MESH_AP_SCAN_CONN_ALL;
     p_start_adv_cb = start_adv_completed_cb;
 
+    interval = param->interval_min;
+
+#if CONFIG_BLE_MESH_RANDOM_ADV_INTERVAL
+    /* If non-connectable mesh packets are transmitted with an adv interval
+     * not smaller than 10ms, then we will use a random adv interval between
+     * [interval / 2, interval] for them.
+     */
+    if (adv_type == BLE_MESH_ADV_NONCONN_IND && interval >= 16) {
+        interval >>= 1;
+        interval += (bt_mesh_get_rand() % (interval + 1));
+
+        BT_INFO("%u->%u", param->interval_min, interval);
+    }
+#endif
+
     /* Check if we can start adv using BTM_BleSetAdvParamsStartAdvCheck */
     BLE_MESH_BTM_CHECK_STATUS(
-        BTM_BleSetAdvParamsAll(param->interval_min, param->interval_max, adv_type,
+        BTM_BleSetAdvParamsAll(interval, interval, adv_type,
                                addr_type_own, &p_dir_bda,
                                channel_map, adv_fil_pol, p_start_adv_cb));
     BLE_MESH_BTM_CHECK_STATUS(BTM_BleStartAdv());
@@ -502,7 +523,7 @@ int bt_le_update_white_list(struct bt_mesh_white_list *wl)
     }
 
     if (BTM_BleUpdateAdvWhitelist(wl->add_remove, wl->remote_bda,
-            wl->addr_type, (tBTM_ADD_WHITELIST_CBACK *)wl->update_wl_comp_cb) == false) {
+            wl->addr_type, (tBTM_UPDATE_WHITELIST_CBACK *)wl->update_wl_comp_cb) == false) {
         return -EIO;
     }
 
@@ -1615,6 +1636,7 @@ static void bt_mesh_bta_gattc_cb(tBTA_GATTC_EVT event, tBTA_GATTC *p_data)
         }
         break;
     case BTA_GATTC_CLOSE_EVT:
+        bta_gattc_clcb_dealloc_by_conn_id(p_data->close.conn_id);
         BT_DBG("BTA_GATTC_CLOSE_EVT");
         break;
     case BTA_GATTC_CONNECT_EVT: {
@@ -1959,17 +1981,20 @@ int bt_mesh_encrypt_be(const uint8_t key[16], const uint8_t plaintext[16],
 }
 
 #if defined(CONFIG_BLE_MESH_USE_DUPLICATE_SCAN)
-int bt_mesh_update_exceptional_list(uint8_t sub_code, uint8_t type, void *info)
+int bt_mesh_update_exceptional_list(uint8_t sub_code, uint32_t type, void *info)
 {
     BD_ADDR value = {0};
 
-    if ((sub_code > BLE_MESH_EXCEP_LIST_CLEAN) ||
-            (type > BLE_MESH_EXCEP_INFO_MESH_PROXY_ADV)) {
+    if ((sub_code > BLE_MESH_EXCEP_LIST_SUB_CODE_CLEAN) ||
+        (sub_code < BLE_MESH_EXCEP_LIST_SUB_CODE_CLEAN &&
+         type > BLE_MESH_EXCEP_LIST_TYPE_MESH_PROXY_ADV) ||
+        (sub_code == BLE_MESH_EXCEP_LIST_SUB_CODE_CLEAN &&
+         !(type & BLE_MESH_EXCEP_LIST_CLEAN_ALL_LIST))) {
         BT_ERR("%s, Invalid parameter", __func__);
         return -EINVAL;
     }
 
-    if (type == BLE_MESH_EXCEP_INFO_MESH_LINK_ID) {
+    if (type == BLE_MESH_EXCEP_LIST_TYPE_MESH_LINK_ID) {
         if (!info) {
             BT_ERR("Invalid Provisioning Link ID");
             return -EINVAL;
@@ -1977,7 +2002,7 @@ int bt_mesh_update_exceptional_list(uint8_t sub_code, uint8_t type, void *info)
         sys_memcpy_swap(value, info, sizeof(uint32_t));
     }
 
-    BT_DBG("%s exceptional list, type 0x%02x", sub_code ? "Remove" : "Add", type);
+    BT_DBG("%s exceptional list, type 0x%08x", sub_code ? "Remove" : "Add", type);
 
     /* The parameter "device_info" can't be NULL in the API */
     BLE_MESH_BTM_CHECK_STATUS(BTM_UpdateBleDuplicateExceptionalList(sub_code, type, value, NULL));

@@ -133,9 +133,9 @@ def test_examples_protocol_https_wss_server(env, extra_data):  # type: (tiny_tes
     dut1.start_app()
 
     # Parse IP address of STA
-    got_port = dut1.expect(re.compile(r'Server listening on port (\d+)'), timeout=60)[0]
+    got_port = dut1.expect(re.compile(r'Server listening on port (\d+)[^\d]'), timeout=60)[0]
     Utility.console_log('Waiting to connect with AP')
-    got_ip = dut1.expect(re.compile(r'IPv4 address: (\d+\.\d+\.\d+\.\d+)'), timeout=60)[0]
+    got_ip = dut1.expect(re.compile(r'IPv4 address: (\d+\.\d+\.\d+\.\d+)[^\d]'), timeout=60)[0]
 
     Utility.console_log('Got IP   : ' + got_ip)
     Utility.console_log('Got Port : ' + got_port)
@@ -154,6 +154,16 @@ def test_examples_protocol_https_wss_server(env, extra_data):  # type: (tiny_tes
         if data != DATA:
             raise RuntimeError('Failed to receive the correct echo response')
         Utility.console_log('Correct echo response obtained from the wss server')
+
+        # Test for PING
+        Utility.console_log('Testing for send PING')
+        ws.write(data=DATA, opcode=OPCODE_PING)
+        dut1.expect('Got a WS PING frame, Replying PONG')
+        opcode, data = ws.read()
+        data = data.decode('UTF-8')
+        if data != DATA or opcode != OPCODE_PONG:
+            raise RuntimeError('Failed to receive the PONG response')
+        Utility.console_log('Passed the test for PING')
 
         # Test for keepalive
         Utility.console_log('Testing for keep alive (approx time = 20s)')

@@ -227,12 +227,12 @@ tAVDT_CTRL_CBACK *const bta_av_dt_cback[] = {
 ***********************************************/
 static UINT8 bta_av_get_scb_handle(tBTA_AV_SCB *p_scb, UINT8 local_sep)
 {
-    UINT8 i = 0;
-    for (i = 0; i < BTAV_A2DP_CODEC_INDEX_MAX; i++) {
-        if ((p_scb->seps[i].tsep == local_sep) &&
-                A2DP_CodecTypeEquals(p_scb->seps[i].codec_info,
+    UINT8 xx = 0;
+    for (xx = 0; xx < BTAV_A2DP_CODEC_INDEX_MAX; xx++) {
+        if ((p_scb->seps[xx].tsep == local_sep) &&
+                A2DP_CodecTypeEquals(p_scb->seps[xx].codec_info,
                                      p_scb->cfg.codec_info)) {
-            return (p_scb->seps[i].av_handle);
+            return (p_scb->seps[xx].av_handle);
         }
     }
     APPL_TRACE_ERROR(" bta_av_get_scb_handle appropiate sep_type not found")
@@ -250,10 +250,10 @@ static UINT8 bta_av_get_scb_handle(tBTA_AV_SCB *p_scb, UINT8 local_sep)
 ***********************************************/
 static UINT8 bta_av_get_scb_sep_type(tBTA_AV_SCB *p_scb, UINT8 tavdt_handle)
 {
-    UINT8 i = 0;
-    for (i = 0; i < BTAV_A2DP_CODEC_INDEX_MAX; i++) {
-        if (p_scb->seps[i].av_handle == tavdt_handle) {
-            return (p_scb->seps[i].tsep);
+    UINT8 xx = 0;
+    for (xx = 0; xx < BTAV_A2DP_CODEC_INDEX_MAX; xx++) {
+        if (p_scb->seps[xx].av_handle == tavdt_handle) {
+            return (p_scb->seps[xx].tsep);
         }
     }
     APPL_TRACE_ERROR(" bta_av_get_scb_sep_type appropiate handle not found")
@@ -724,19 +724,18 @@ static void bta_av_a2d_sdp_cback(BOOLEAN found, tA2D_Service *p_service)
 *******************************************************************************/
 static void bta_av_adjust_seps_idx(tBTA_AV_SCB *p_scb, UINT8 avdt_handle)
 {
-    int i;
-    APPL_TRACE_DEBUG("%s: codec: %s", __func__,
-                     A2DP_CodecName(p_scb->cfg.codec_info));
+    int xx;
+    APPL_TRACE_DEBUG("bta_av_adjust_seps_idx codec_type: %d", p_scb->codec_type);
 
-    for (i = 0; i < BTAV_A2DP_CODEC_INDEX_MAX; i++) {
+    for (xx = 0; xx < BTA_AV_MAX_SEPS; xx++) {
         APPL_TRACE_DEBUG("av_handle: %d codec: %s",
-                         p_scb->seps[i].av_handle,
-                         A2DP_CodecName(p_scb->seps[i].codec_info));
-        if (p_scb->seps[i].av_handle && (p_scb->seps[i].av_handle == avdt_handle) &&
-            A2DP_CodecTypeEquals(p_scb->seps[i].codec_info,
+                         p_scb->seps[xx].av_handle,
+                         A2DP_CodecName(p_scb->seps[xx].codec_info));
+        if (p_scb->seps[xx].av_handle && (p_scb->seps[xx].av_handle == avdt_handle) &&
+            A2DP_CodecTypeEquals(p_scb->seps[xx].codec_info,
                                  p_scb->cfg.codec_info)) {
-            p_scb->sep_idx      = i;
-            p_scb->avdt_handle  = p_scb->seps[i].av_handle;
+            p_scb->sep_idx      = xx;
+            p_scb->avdt_handle  = p_scb->seps[xx].av_handle;
             break;
         }
     }
@@ -1027,6 +1026,7 @@ void bta_av_cleanup(tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
     p_scb->wait = 0;
     p_scb->num_disc_snks = 0;
     p_scb->disc_rsn = 0;
+    p_scb->avdt_handle = 0;
     bta_sys_stop_timer(&p_scb->timer);
     if (p_scb->deregistring) {
         /* remove stream */
@@ -1292,11 +1292,11 @@ void bta_av_setconfig_rsp (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
         if (A2DP_GetCodecType(p_scb->cfg.codec_info) == A2D_MEDIA_CT_SBC ||
             num > 1) {
             /* if SBC is used by the SNK as INT, discover req is not sent in bta_av_config_ind.
-                       * call disc_res now */
+                       * call cfg_res now */
             /* this is called in A2DP SRC path only, In case of SINK we don't need it  */
             if (local_sep == AVDT_TSEP_SRC) {
-                p_scb->p_cos->disc_res(p_scb->hndl, num, num, 0, p_scb->peer_addr,
-                                       UUID_SERVCLASS_AUDIO_SOURCE);
+                p_scb->p_cos->cfg_res(p_scb->hndl, num, num, 0, p_scb->peer_addr,
+                                      UUID_SERVCLASS_AUDIO_SOURCE);
             }
         } else {
             /* we do not know the peer device and it is using non-SBC codec
@@ -1902,7 +1902,7 @@ void bta_av_setconfig_rej (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
 
     bta_av_adjust_seps_idx(p_scb, avdt_handle);
     APPL_TRACE_DEBUG("bta_av_setconfig_rej: sep_idx: %d", p_scb->sep_idx);
-    AVDT_ConfigRsp(p_scb->avdt_handle, p_scb->avdt_label, AVDT_ERR_UNSUP_CFG, 0);
+    AVDT_ConfigRsp(p_scb->avdt_handle, p_scb->avdt_label, p_data->ci_setconfig.err_code, 0);
 
     bdcpy(reject.bd_addr, p_data->str_msg.bd_addr);
     reject.hndl = p_scb->hndl;

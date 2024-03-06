@@ -501,9 +501,10 @@ void refreshShowHints(struct abuf *ab, struct linenoiseState *l, int plen) {
             int hintmaxlen = l->cols-(plen+l->len);
             if (hintlen > hintmaxlen) hintlen = hintmaxlen;
             if (bold == 1 && color == -1) color = 37;
-            if (color != -1 || bold != 0)
+            if (color != -1 || bold != 0) {
                 snprintf(seq,64,"\033[%d;%d;49m",bold,color);
-            abAppend(ab,seq,strlen(seq));
+                abAppend(ab,seq,strlen(seq));
+            }
             abAppend(ab,hint,hintlen);
             if (color != -1 || bold != 0)
                 abAppend(ab,"\033[0m",4);
@@ -803,6 +804,23 @@ uint32_t getMillis(void) {
     return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+static inline size_t prompt_len_ignore_escape_seq(const char *prompt) {
+    size_t plen = 0;
+    bool in_escape_sequence = false;
+
+    for (; *prompt != '\0'; ++prompt) {
+        if (*prompt == '\033') {
+            in_escape_sequence = true;
+        } else if (in_escape_sequence && *prompt == 'm') {
+            in_escape_sequence = false;
+        } else if (!in_escape_sequence) {
+            ++plen;
+        }
+    }
+
+    return plen;
+}
+
 /* This function is the core of the line editing capability of linenoise.
  * It expects 'fd' to be already in "raw mode" so that every key pressed
  * will be returned ASAP to read().
@@ -838,15 +856,16 @@ static int linenoiseEdit(char *buf, size_t buflen, const char *prompt)
      * initially is just an empty string. */
     linenoiseHistoryAdd("");
 
-    int pos1 = getCursorPosition();
     if (write(out_fd, prompt,l.plen) == -1) {
         return -1;
     }
     flushWrite();
-    int pos2 = getCursorPosition();
-    if (pos1 >= 0 && pos2 >= 0) {
-        l.plen = pos2 - pos1;
-    }
+
+    /* If the prompt has been registered with ANSI escape sequences
+     * for terminal colors then we remove them from the prompt length
+     * calculation. */
+    l.plen = prompt_len_ignore_escape_seq(prompt);
+
     while(1) {
         char c;
         int nread;
@@ -865,7 +884,7 @@ static int linenoiseEdit(char *buf, size_t buflen, const char *prompt)
         nread = read(in_fd, &c, 1);
         if (nread <= 0) return l.len;
 
-        if ( (getMillis() - t1) < LINENOISE_PASTE_KEY_DELAY ) {
+        if ( (getMillis() - t1) < LINENOISE_PASTE_KEY_DELAY && c != ENTER) {
             /* Pasting data, insert characters without formatting.
              * This can only be performed when the cursor is at the end of the
              * line. */
@@ -1055,6 +1074,10 @@ int linenoiseProbe(void) {
         int cb = read(stdin_fileno, &c, 1);
         if (cb < 0) {
             continue;
+        }
+        if (read_bytes == 0 && c != '\x1b') {
+            /* invalid response */
+            break;
         }
         read_bytes += cb;
     }

@@ -48,21 +48,23 @@ typedef struct rtc_cntl_sleep_retent {
 
 #if SOC_PM_SUPPORT_EXT_WAKEUP
 
-#define rtc_hal_ext1_get_wakeup_pins()                    rtc_cntl_ll_ext1_get_wakeup_pins()
+#define rtc_hal_ext1_get_wakeup_status()                  rtc_cntl_ll_ext1_get_wakeup_status()
+
+#define rtc_hal_ext1_clear_wakeup_status()                rtc_cntl_ll_ext1_clear_wakeup_status()
 
 #define rtc_hal_ext1_set_wakeup_pins(mask, mode)          rtc_cntl_ll_ext1_set_wakeup_pins(mask, mode)
 
 #define rtc_hal_ext1_clear_wakeup_pins()                  rtc_cntl_ll_ext1_clear_wakeup_pins()
 
+#define rtc_hal_ext1_get_wakeup_pins()                    rtc_cntl_ll_ext1_get_wakeup_pins()
+
 #endif
 
 #if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
 
-#define rtc_hal_gpio_get_wakeup_pins()                    rtc_cntl_ll_gpio_get_wakeup_pins()
+#define rtc_hal_gpio_get_wakeup_status()                  rtc_cntl_ll_gpio_get_wakeup_status()
 
-#define rtc_hal_gpio_clear_wakeup_pins()                  rtc_cntl_ll_gpio_clear_wakeup_pins()
-
-#define rtc_hal_gpio_set_wakeup_pins()                    rtc_cntl_ll_gpio_set_wakeup_pins()
+#define rtc_hal_gpio_clear_wakeup_status()                rtc_cntl_ll_gpio_clear_wakeup_status()
 
 #endif
 
@@ -90,3 +92,5 @@ void rtc_cntl_hal_disable_tagmem_retention(void *addr);
  * Enable wakeup from ULP coprocessor.
  */
 #define rtc_hal_ulp_wakeup_enable()                       rtc_cntl_ll_ulp_wakeup_enable()
+
+#define rtc_hal_ulp_int_clear()                           rtc_cntl_ll_ulp_int_clear()

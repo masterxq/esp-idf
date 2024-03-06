@@ -6,13 +6,26 @@ idf_build_get_property(python PYTHON)
 idf_build_get_property(idf_path IDF_PATH)
 
 set(chip_model ${target})
+if(target STREQUAL "esp32h2")
+    set(chip_model esp32h2beta1)
+endif()
 
 set(ESPTOOLPY ${python} "$ENV{ESPTOOL_WRAPPER}" "${CMAKE_CURRENT_LIST_DIR}/esptool/esptool.py" --chip ${chip_model})
 set(ESPSECUREPY ${python} "${CMAKE_CURRENT_LIST_DIR}/esptool/espsecure.py")
 set(ESPEFUSEPY ${python} "${CMAKE_CURRENT_LIST_DIR}/esptool/espefuse.py")
 set(ESPMONITOR ${python} "${idf_path}/tools/idf_monitor.py")
 
-set(ESPFLASHMODE ${CONFIG_ESPTOOLPY_FLASHMODE})
+if(CONFIG_BOOTLOADER_FLASH_DC_AWARE)
+# When set flash frequency to 120M, must keep 1st bootloader work under ``DOUT`` mode
+# because on some flash chips, 120M will modify the status register,
+# which will make ROM won't work.
+# This change intends to be for esptool only and the bootloader should keep use
+# ``DOUT`` mode.
+    set(ESPFLASHMODE "dout")
+    message("Note: HPM is enabled for the flash, force the ROM bootloader into DOUT mode for stable boot on")
+else()
+    set(ESPFLASHMODE ${CONFIG_ESPTOOLPY_FLASHMODE})
+endif()
 set(ESPFLASHFREQ ${CONFIG_ESPTOOLPY_FLASHFREQ})
 set(ESPFLASHSIZE ${CONFIG_ESPTOOLPY_FLASHSIZE})
 
@@ -23,6 +36,17 @@ set(ESPTOOLPY_FLASH_OPTIONS
     --flash_freq ${ESPFLASHFREQ}
     --flash_size ${ESPFLASHSIZE}
     )
+
+if(BOOTLOADER_BUILD AND CONFIG_SECURE_BOOT_V2_ENABLED)
+    # The bootloader binary needs to be 4KB aligned in order to append a secure boot V2 signature block.
+    # If CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES is NOT set, the bootloader
+    # image generated is not 4KB aligned for external HSM to sign it readily.
+    # Following esptool option --pad-to-size 4KB generates a 4K aligned bootloader image.
+    # In case of signing during build, espsecure.py "sign_data" operation handles the 4K alignment of the image.
+    if(NOT CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES)
+        list(APPEND esptool_elf2image_args --pad-to-size 4KB)
+    endif()
+endif()
 
 if(NOT BOOTLOADER_BUILD)
     set(esptool_elf2image_args --elf-sha256-offset 0xb0)
@@ -37,18 +61,24 @@ if(NOT CONFIG_SECURE_BOOT_ALLOW_SHORT_APP_PARTITION AND
     endif()
 endif()
 
-if(CONFIG_ESP32_REV_MIN)
-    set(min_rev ${CONFIG_ESP32_REV_MIN})
+# We still set "--min-rev" to keep the app compatible with older booloaders where this field is controlled.
+if(CONFIG_IDF_TARGET_ESP32)
+    # for this chip min_rev is major revision
+    math(EXPR min_rev "${CONFIG_ESP_REV_MIN_FULL} / 100")
 endif()
-if(CONFIG_ESP32C3_REV_MIN)
-    set(min_rev ${CONFIG_ESP32C3_REV_MIN})
+if(CONFIG_IDF_TARGET_ESP32C3)
+    # for this chip min_rev is minor revision
+    math(EXPR min_rev "${CONFIG_ESP_REV_MIN_FULL} % 100")
 endif()
 
 if(min_rev)
     list(APPEND esptool_elf2image_args --min-rev ${min_rev})
-    set(monitor_rev_args "--revision;${min_rev}")
-    unset(min_rev)
 endif()
+
+list(APPEND esptool_elf2image_args --min-rev-full ${CONFIG_ESP_REV_MIN_FULL})
+list(APPEND esptool_elf2image_args --max-rev-full ${CONFIG_ESP_REV_MAX_FULL})
+
+set(monitor_rev_args "--revision;${CONFIG_ESP_REV_MIN_FULL}")
 
 if(CONFIG_ESPTOOLPY_FLASHSIZE_DETECT)
     # Set ESPFLASHSIZE to 'detect' *after* elf2image options are generated,
@@ -109,6 +139,8 @@ endif()
 if(NOT BOOTLOADER_BUILD AND CONFIG_SECURE_SIGNED_APPS)
     if(CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES)
         # for locally signed secure boot image, add a signing step to get from unsigned app to signed app
+        get_filename_component(secure_boot_signing_key "${CONFIG_SECURE_BOOT_SIGNING_KEY}"
+            ABSOLUTE BASE_DIR "${project_dir}")
         add_custom_command(OUTPUT "${build_dir}/.signed_bin_timestamp"
             COMMAND ${ESPSECUREPY} sign_data --version ${secure_boot_version} --keyfile ${secure_boot_signing_key}
                 -o "${build_dir}/${PROJECT_BIN}" "${build_dir}/${unsigned_project_binary}"

@@ -282,6 +282,7 @@ typedef BOOLEAN (*tBTA_AVRC_CO_RN_EVT_SUPPORTED) (UINT8 event_id);
 typedef struct {
     tBTA_AV_CO_INIT               init;
     tBTA_AV_CO_DISC_RES           disc_res;
+    tBTA_AV_CO_CFG_RES            cfg_res;
     tBTA_AV_CO_GETCFG             getcfg;
     tBTA_AV_CO_SETCFG             setcfg;
     tBTA_AV_CO_OPEN               open;

@@ -1,18 +1,7 @@
 #!/usr/bin/env python
 #
-# Copyright 2020 Espressif Systems (Shanghai) PTE LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2021 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import division, print_function, unicode_literals
 
@@ -20,8 +9,13 @@ import os
 import re
 
 import ttfw_idf
-import websocket
 from tiny_test_fw import Utility
+
+try:
+    import websocket
+except ImportError:
+    print("Please install 'websocket' by running 'python -m pip install websocket-client'")
+    raise
 
 OPCODE_TEXT = 0x1
 OPCODE_BIN = 0x2
@@ -69,7 +63,7 @@ def test_examples_protocol_http_ws_echo_server(env, extra_data):
 
     # Parse IP address of STA
     Utility.console_log('Waiting to connect with AP')
-    got_ip = dut1.expect(re.compile(r'IPv4 address: (\d+.\d+.\d+.\d+)'), timeout=60)[0]
+    got_ip = dut1.expect(re.compile(r'IPv4 address: (\d+\.\d+\.\d+\.\d+)[^\d]'), timeout=60)[0]
     got_port = dut1.expect(re.compile(r"Starting server on port: '(\d+)'"), timeout=60)[0]
 
     Utility.console_log('Got IP   : ' + got_ip)

@@ -550,7 +550,7 @@ void bta_av_co_audio_setconfig(tBTA_AV_HNDL hndl,
     UINT8 status = A2D_SUCCESS;
     UINT8 category = A2D_SUCCESS;
     BOOLEAN recfg_needed = FALSE;
-    BOOLEAN codec_cfg_supported = FALSE;
+    UINT8 codec_cfg_status = A2D_SUCCESS;
     UNUSED(seid);
     UNUSED(addr);
 
@@ -631,15 +631,15 @@ void bta_av_co_audio_setconfig(tBTA_AV_HNDL hndl,
             osi_mutex_global_unlock();
         } else {
             category = AVDT_ASC_CODEC;
-            status = A2D_WRONG_CODEC;
+            status = A2D_FAIL;
         }
     }
 
     if (status != A2D_SUCCESS) {
-        APPL_TRACE_DEBUG("bta_av_co_audio_setconfig reject s=%d c=%d", status, category);
+        APPL_TRACE_DEBUG("bta_av_co_audio_setconfig reject s=%d c=%d", codec_cfg_status, category);
 
         /* Call call-in rejecting the configuration */
-        bta_av_ci_setconfig(hndl, status, category, 0, NULL, FALSE, avdt_handle);
+        bta_av_ci_setconfig(hndl, codec_cfg_status, category, 0, NULL, FALSE, avdt_handle);
     } else {
         /* Mark that this is an acceptor peer */
         p_peer->acp = TRUE;
@@ -1388,6 +1388,7 @@ BOOLEAN bta_av_co_get_remote_bitpool_pref(UINT8 *min, UINT8 *max)
 const tBTA_AV_CO_FUNCTS bta_av_a2d_cos = {
     bta_av_co_audio_init,
     bta_av_co_audio_disc_res,
+    bta_av_co_audio_cfg_res,
     bta_av_co_audio_getconfig,
     bta_av_co_audio_setconfig,
     bta_av_co_audio_open,

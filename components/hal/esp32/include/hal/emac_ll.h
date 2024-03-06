@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -342,6 +342,11 @@ static inline uint32_t emac_ll_transmit_frame_ctrl_status(emac_mac_dev_t *mac_re
     return mac_regs->emacdebug.mactfcs;
 }
 
+static inline uint32_t emac_ll_receive_read_ctrl_state(emac_mac_dev_t *mac_regs)
+{
+    return mac_regs->emacdebug.mtlrfrcs;
+}
+
 /* emacmiidata */
 static inline void emac_ll_set_phy_data(emac_mac_dev_t *mac_regs, uint32_t data)
 {
@@ -410,6 +415,11 @@ static inline void emac_ll_trans_store_forward_enable(emac_dma_dev_t *dma_regs, 
 static inline void emac_ll_flush_trans_fifo_enable(emac_dma_dev_t *dma_regs, bool enable)
 {
     dma_regs->dmaoperation_mode.flush_tx_fifo = enable;
+}
+
+static inline bool emac_ll_get_flush_trans_fifo(emac_dma_dev_t *dma_regs)
+{
+    return dma_regs->dmaoperation_mode.flush_tx_fifo;
 }
 
 static inline void emac_ll_set_transmit_threshold(emac_dma_dev_t *dma_regs, uint32_t threshold)

@@ -54,6 +54,17 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 			esp_wifi_set_rssi_threshold(EXAMPLE_WIFI_RSSI_THRESHOLD);
 		}
 #endif
+		if (esp_rrm_is_rrm_supported_connection()) {
+			ESP_LOGI(TAG,"RRM supported");
+		} else {
+			ESP_LOGI(TAG,"RRM not supported");
+		}
+		if (esp_wnm_is_btm_supported_connection()) {
+			ESP_LOGI(TAG,"BTM supported");
+		} else {
+			ESP_LOGI(TAG,"BTM not supported");
+		}
+
 	}
 }
 
@@ -293,9 +304,7 @@ void neighbor_report_recv_cb(void *ctx, const uint8_t *report, size_t report_len
 			goto cleanup;
 		}
 		/* cleanup from net802.11 */
-		uint16_t number = 1;
-		wifi_ap_record_t ap_records;
-		esp_wifi_scan_get_ap_records(&number, &ap_records);
+		esp_wifi_clear_ap_list();
 		cand_list = 1;
 	}
 	/* send AP btm query, this will cause STA to roam as well */

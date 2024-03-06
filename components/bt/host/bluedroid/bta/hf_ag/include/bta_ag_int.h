@@ -48,6 +48,7 @@
 #define HFP_VERSION_1_1         0x0101
 #define HFP_VERSION_1_5         0x0105
 #define HFP_VERSION_1_6         0x0106
+#define HFP_VERSION_1_7         0x0107
 
 #define HSP_VERSION_1_0         0x0100
 #define HSP_VERSION_1_2         0x0102
@@ -75,12 +76,12 @@
 #define BTA_AG_INT              1       /* initiating connection */
 
 /* feature mask that matches spec */
-#define BTA_AG_BSRF_FEAT_SPEC        (BTA_AG_FEAT_3WAY | BTA_AG_FEAT_ECNR    | \
-                                      BTA_AG_FEAT_VREC | BTA_AG_FEAT_INBAND  | \
-                                      BTA_AG_FEAT_VTAG | BTA_AG_FEAT_REJECT  | \
-                                      BTA_AG_FEAT_ECS  | BTA_AG_FEAT_ECC     | \
-                                      BTA_AG_FEAT_EXTERR | BTA_AG_FEAT_CODEC | \
-                                      BTA_AG_FEAT_VOIP)
+#define BTA_AG_BSRF_FEAT_SPEC        (BTA_AG_FEAT_3WAY   | BTA_AG_FEAT_ECNR    | \
+                                      BTA_AG_FEAT_VREC   | BTA_AG_FEAT_INBAND  | \
+                                      BTA_AG_FEAT_VTAG   | BTA_AG_FEAT_REJECT  | \
+                                      BTA_AG_FEAT_ECS    | BTA_AG_FEAT_ECC     | \
+                                      BTA_AG_FEAT_EXTERR | BTA_AG_FEAT_CODEC   | \
+                                      BTA_AG_FEAT_ESCO_S4| BTA_AG_FEAT_VOIP)
 
 #define BTA_AG_SDP_FEAT_SPEC         (BTA_AG_FEAT_3WAY | BTA_AG_FEAT_ECNR    | \
                                       BTA_AG_FEAT_VREC | BTA_AG_FEAT_INBAND  | \
@@ -112,6 +113,7 @@ enum
     BTA_AG_SVC_TOUT_EVT,
     BTA_AG_CI_SCO_DATA_EVT,
     BTA_AG_CI_SLC_READY_EVT,
+    BTA_AG_PKT_STAT_NUMS_GET_EVT,
     BTA_AG_MAX_EVT,
 
     /* these events are handled outside of the state machine */
@@ -217,6 +219,13 @@ typedef struct
     char            p_data[BTA_AG_MTU+1];
 } tBTA_AG_CI_RX_WRITE;
 
+/* data type for BTA_AG_PKT_STAT_NUMS_GET_EVT */
+typedef struct
+{
+    BT_HDR          hdr;
+    UINT16          sync_conn_handle;
+} tBTA_AG_PKT_STAT_GET;
+
 /* union of all event datatypes */
 typedef union
 {
@@ -231,6 +240,7 @@ typedef union
     tBTA_AG_DISC_RESULT     disc_result;
     tBTA_AG_RFC             rfc;
     tBTA_AG_CI_RX_WRITE     ci_rx_write;
+    tBTA_AG_PKT_STAT_GET    pkt_stat;
 } tBTA_AG_DATA;
 
 /* type for each profile */
@@ -275,7 +285,7 @@ typedef struct
     tBTA_AG_SCO_MSBC_SETTINGS codec_msbc_settings; /* settings to be used for the impending eSCO */
     TIMER_LIST_ENT      cn_timer;       /* codec negotiation timer */
 #endif
-    UINT16              sco_idx;        /* SCO handle */
+    UINT16              sco_idx;        /* SCO connection index */
     BOOLEAN             in_use;         /* scb in use */
     BOOLEAN             dealloc;        /* TRUE if service shutting down */
     BOOLEAN             clip_enabled;   /* set to TRUE if HF enables CLIP reporting */
@@ -436,6 +446,7 @@ extern void bta_ag_ci_sco_data(tBTA_AG_SCB *p_scb, tBTA_AG_DATA *p_data);
 extern void bta_ag_set_esco_param(BOOLEAN set_reset, tBTM_ESCO_PARAMS *param);
 extern void bta_ag_ci_rx_data(tBTA_AG_SCB *p_scb, tBTA_AG_DATA *p_data);
 extern void bta_ag_rcvd_slc_ready(tBTA_AG_SCB *p_scb, tBTA_AG_DATA *p_data);
+extern void bta_ag_pkt_stat_nums(tBTA_AG_SCB *p_scb, tBTA_AG_DATA *p_data);
 
 #endif /* #if (BTA_AG_INCLUDED == TRUE) */
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,12 +10,12 @@
 #include "freertos/semphr.h"
 #include "esp_err.h"
 #include "esp_intr_alloc.h"
-#include "test_usb_mock_classes.h"
+#include "test_usb_common.h"
+#include "test_usb_mock_msc.h"
 #include "msc_client.h"
 #include "ctrl_client.h"
 #include "usb/usb_host.h"
 #include "unity.h"
-#include "test_utils.h"
 
 #define TEST_MSC_NUM_SECTORS_TOTAL          10
 #define TEST_MSC_NUM_SECTORS_PER_XFER       2
@@ -44,10 +44,12 @@ Procedure:
     - Uninstall USB Host Library
 */
 
-TEST_CASE("Test USB Host async (single client)", "[usb_host][ignore]")
+TEST_CASE("Test USB Host async client (single client)", "[usb_host][ignore]")
 {
+    test_usb_init_phy();    //Initialize the internal USB PHY and USB Controller for testing
     //Install USB Host
     usb_host_config_t host_config = {
+        .skip_phy_setup = true,     //test_usb_init_phy() will already have setup the internal USB PHY for us
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
@@ -63,6 +65,7 @@ TEST_CASE("Test USB Host async (single client)", "[usb_host][ignore]")
     };
     TaskHandle_t task_hdl;
     xTaskCreatePinnedToCore(msc_client_async_seq_task, "async", 4096, (void *)&params, 2, &task_hdl, 0);
+    TEST_ASSERT_NOT_NULL_MESSAGE(task_hdl, "Failed to create async task");
     //Start the task
     xTaskNotifyGive(task_hdl);
 
@@ -83,6 +86,7 @@ TEST_CASE("Test USB Host async (single client)", "[usb_host][ignore]")
     vTaskDelay(10);
     //Clean up USB Host
     ESP_ERROR_CHECK(usb_host_uninstall());
+    test_usb_deinit_phy();  //Deinitialize the internal USB PHY after testing
 }
 
 /*
@@ -105,10 +109,12 @@ Procedure:
     - Free all devices
     - Uninstall USB Host Library
 */
-TEST_CASE("Test USB Host async (multi client)", "[usb_host][ignore]")
+TEST_CASE("Test USB Host async client (multi client)", "[usb_host][ignore]")
 {
+    test_usb_init_phy();    //Initialize the internal USB PHY and USB Controller for testing
     //Install USB Host
     usb_host_config_t host_config = {
+        .skip_phy_setup = true,     //test_usb_init_phy() will already have setup the internal USB PHY for us
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
@@ -124,6 +130,7 @@ TEST_CASE("Test USB Host async (multi client)", "[usb_host][ignore]")
     };
     TaskHandle_t msc_task_hdl;
     xTaskCreatePinnedToCore(msc_client_async_seq_task, "msc", 4096, (void *)&msc_params, 2, &msc_task_hdl, 0);
+    TEST_ASSERT_NOT_NULL_MESSAGE(msc_task_hdl, "Failed to create MSC task");
 
     //Create task a control transfer client
     ctrl_client_test_param_t ctrl_params = {
@@ -133,6 +140,7 @@ TEST_CASE("Test USB Host async (multi client)", "[usb_host][ignore]")
     };
     TaskHandle_t ctrl_task_hdl;
     xTaskCreatePinnedToCore(ctrl_client_async_seq_task, "ctrl", 4096, (void *)&ctrl_params, 2, &ctrl_task_hdl, 0);
+    TEST_ASSERT_NOT_NULL_MESSAGE(ctrl_task_hdl, "Failed to create CTRL task");
 
     //Start both tasks
     xTaskNotifyGive(msc_task_hdl);
@@ -155,4 +163,151 @@ TEST_CASE("Test USB Host async (multi client)", "[usb_host][ignore]")
     vTaskDelay(10);
     //Clean up USB Host
     ESP_ERROR_CHECK(usb_host_uninstall());
+    test_usb_deinit_phy();  //Deinitialize the internal USB PHY after testing
+}
+
+/*
+Test USB Host Asynchronous API Usage
+
+Requires: This test requires an MSC SCSI device to be attached (see the MSC mock class)
+
+Purpose:
+    - Test that incorrect usage of USB Host Asynchronous API will returns errors
+
+Procedure:
+    - Install USB Host Library
+    - Register two clients and all event handler functions from the same loop
+    - Wait for each client to detect device connection
+    - Check that both clients can open the same device
+    - Check that a client cannot open a non-existent device
+    - Check that only one client can claim a particular interface
+    - Check that a client cannot release an already released interface
+    - Wait for device disconnection
+    - Cleanup
+*/
+
+static uint8_t dev_addr = 0;
+
+typedef enum {
+    CLIENT_TEST_STAGE_NONE,
+    CLIENT_TEST_STAGE_CONN,
+    CLIENT_TEST_STAGE_DCONN,
+} client_test_stage_t;
+
+static void test_async_client_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
+{
+    client_test_stage_t *stage = (client_test_stage_t *)arg;
+
+    switch (event_msg->event) {
+        case USB_HOST_CLIENT_EVENT_NEW_DEV:
+            if (dev_addr == 0) {
+                dev_addr = event_msg->new_dev.address;
+            } else {
+                TEST_ASSERT_EQUAL(dev_addr, event_msg->new_dev.address);
+            }
+            *stage = CLIENT_TEST_STAGE_CONN;
+            break;
+        case USB_HOST_CLIENT_EVENT_DEV_GONE:
+            *stage = CLIENT_TEST_STAGE_DCONN;
+            break;
+        default:
+            abort();
+            break;
+    }
+}
+
+TEST_CASE("Test USB Host async API", "[usb_host][ignore]")
+{
+    test_usb_init_phy();    //Initialize the internal USB PHY and USB Controller for testing
+
+    //Install USB Host
+    usb_host_config_t host_config = {
+        .skip_phy_setup = true,     //test_usb_init_phy() will already have setup the internal USB PHY for us
+        .intr_flags = ESP_INTR_FLAG_LEVEL1,
+    };
+    ESP_ERROR_CHECK(usb_host_install(&host_config));
+    printf("Installed\n");
+
+    //Register two clients
+    client_test_stage_t client0_stage = CLIENT_TEST_STAGE_NONE;
+    client_test_stage_t client1_stage = CLIENT_TEST_STAGE_NONE;
+
+    usb_host_client_config_t client_config = {
+        .is_synchronous = false,
+        .max_num_event_msg = 5,
+        .async = {
+            .client_event_callback = test_async_client_cb,
+            .callback_arg = (void *)&client0_stage,
+        },
+    };
+    usb_host_client_handle_t client0_hdl;
+    usb_host_client_handle_t client1_hdl;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_client_register(&client_config, &client0_hdl));
+    client_config.async.callback_arg = (void *)&client1_stage;
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_client_register(&client_config, &client1_hdl));
+
+    //Wait until the device connects and the clients receive the event
+    while (!(client0_stage == CLIENT_TEST_STAGE_CONN && client1_stage == CLIENT_TEST_STAGE_CONN)) {
+        usb_host_lib_handle_events(0, NULL);
+        usb_host_client_handle_events(client0_hdl, 0);
+        usb_host_client_handle_events(client1_hdl, 0);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    //Check that both clients can open the device
+    TEST_ASSERT_NOT_EQUAL(0, dev_addr);
+    usb_device_handle_t client0_dev_hdl;
+    usb_device_handle_t client1_dev_hdl;
+    printf("Opening device\n");
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_device_open(client0_hdl, dev_addr, &client0_dev_hdl));
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_device_open(client1_hdl, dev_addr, &client1_dev_hdl));
+    TEST_ASSERT_EQUAL_PTR(client0_dev_hdl, client1_dev_hdl);    //Check that its the same device
+    //Check that a client cannot open a non-existent device
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, usb_host_device_open(client0_hdl, 0, &client0_dev_hdl));
+
+    //Check that the device cannot be opened again by the same client
+    usb_device_handle_t dummy_dev_hdl;
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, usb_host_device_open(client0_hdl, dev_addr, &dummy_dev_hdl));
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, usb_host_device_open(client1_hdl, dev_addr, &dummy_dev_hdl));
+    printf("Claiming interface\n");
+    //Check that both clients cannot claim the same interface
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_interface_claim(client0_hdl, client0_dev_hdl, MOCK_MSC_SCSI_INTF_NUMBER, MOCK_MSC_SCSI_INTF_ALT_SETTING));
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, usb_host_interface_claim(client1_hdl, client1_dev_hdl, MOCK_MSC_SCSI_INTF_NUMBER, MOCK_MSC_SCSI_INTF_ALT_SETTING));
+    //Check that client0 cannot claim the same interface multiple times
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, usb_host_interface_claim(client0_hdl, client0_dev_hdl, MOCK_MSC_SCSI_INTF_NUMBER, MOCK_MSC_SCSI_INTF_ALT_SETTING));
+
+    printf("Releasing interface\n");
+    //Check that client0 can release the interface
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_interface_release(client0_hdl, client0_dev_hdl, MOCK_MSC_SCSI_INTF_NUMBER));
+    //Check that client0 cannot release interface it has not claimed
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, usb_host_interface_release(client0_hdl, client0_dev_hdl, MOCK_MSC_SCSI_INTF_NUMBER));
+
+    //Wait until the device disconnects and the clients receive the event
+    test_usb_set_phy_state(false, 0);
+    while (!(client0_stage == CLIENT_TEST_STAGE_DCONN && client1_stage == CLIENT_TEST_STAGE_DCONN)) {
+        usb_host_lib_handle_events(0, NULL);
+        usb_host_client_handle_events(client0_hdl, 0);
+        usb_host_client_handle_events(client1_hdl, 0);
+        vTaskDelay(10);
+    }
+    printf("Closing device\n");
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_device_close(client0_hdl, client0_dev_hdl));
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_device_close(client1_hdl, client1_dev_hdl));
+
+    //Deregister the clients
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_client_deregister(client0_hdl));
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_client_deregister(client1_hdl));
+
+    while (1) {
+        uint32_t event_flags;
+        usb_host_lib_handle_events(0, &event_flags);
+        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
+            break;
+        }
+        vTaskDelay(10);
+    }
+
+    //Cleanup
+    TEST_ASSERT_EQUAL(ESP_OK, usb_host_uninstall());
+    test_usb_deinit_phy();
 }

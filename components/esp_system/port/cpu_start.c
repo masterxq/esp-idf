@@ -33,13 +33,11 @@
 #include "esp32s2/rom/cache.h"
 #include "esp32s2/spiram.h"
 #include "esp32s2/dport_access.h"
-#include "esp32s2/memprot.h"
 #elif CONFIG_IDF_TARGET_ESP32S3
 #include "esp32s3/rtc.h"
 #include "esp32s3/rom/cache.h"
 #include "esp32s3/spiram.h"
 #include "esp32s3/dport_access.h"
-#include "esp32s3/memprot.h"
 #include "soc/assist_debug_reg.h"
 #include "soc/cache_memory.h"
 #include "soc/system_reg.h"
@@ -48,12 +46,18 @@
 #include "esp32c3/rtc.h"
 #include "esp32c3/rom/cache.h"
 #include "soc/cache_memory.h"
-#include "esp32c3/memprot.h"
 #elif CONFIG_IDF_TARGET_ESP32H2
 #include "esp32h2/rtc.h"
 #include "esp32h2/rom/cache.h"
 #include "soc/cache_memory.h"
-#include "esp32h2/memprot.h"
+#endif
+
+#if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
+#if CONFIG_IDF_TARGET_ESP32S2
+#include "esp32s2/memprot.h"
+#else
+#include "esp_memprot.h"
+#endif
 #endif
 
 #include "esp_private/spi_flash_os.h"
@@ -62,17 +66,20 @@
 #include "esp_private/crosscore_int.h"
 #include "esp_flash_encrypt.h"
 
-#include "hal/rtc_io_hal.h"
-#include "hal/gpio_hal.h"
+#include "esp_private/sleep_gpio.h"
 #include "hal/wdt_hal.h"
 #include "soc/rtc.h"
 #include "soc/efuse_reg.h"
+#if (SOC_CPU_CORES_NUM > 1)
+#include "hal/cache_ll.h"
+#endif
+#include "hal/efuse_ll.h"
 #include "soc/periph_defs.h"
 #include "soc/cpu.h"
 #include "soc/rtc.h"
 #include "soc/spinlock.h"
 
-#if CONFIG_ESP32_TRAX || CONFIG_ESP32S2_TRAX
+#if CONFIG_ESP32_TRAX || CONFIG_ESP32S2_TRAX || CONFIG_ESP32S3_TRAX
 #include "trax.h"
 #endif
 
@@ -91,18 +98,6 @@
 #include "esp32h2/rom/spi_flash.h"
 #endif
 #endif // CONFIG_APP_BUILD_TYPE_ELF_RAM
-
-// Set efuse ROM_LOG_MODE on first boot
-//
-// For CONFIG_BOOT_ROM_LOG_ALWAYS_ON (default) or undefined (ESP32), leave
-// ROM_LOG_MODE undefined (no need to call this function during startup)
-#if CONFIG_BOOT_ROM_LOG_ALWAYS_OFF
-#define ROM_LOG_MODE ESP_EFUSE_ROM_LOG_ALWAYS_OFF
-#elif CONFIG_BOOT_ROM_LOG_ON_GPIO_LOW
-#define ROM_LOG_MODE ESP_EFUSE_ROM_LOG_ON_GPIO_LOW
-#elif CONFIG_BOOT_ROM_LOG_ON_GPIO_HIGH
-#define ROM_LOG_MODE ESP_EFUSE_ROM_LOG_ON_GPIO_HIGH
-#endif
 
 
 #include "esp_private/startup_internal.h"
@@ -186,10 +181,9 @@ void IRAM_ATTR call_start_cpu1(void)
     //has started, but it isn't active *on this CPU* yet.
     esp_cache_err_int_init();
 
-#if CONFIG_IDF_TARGET_ESP32
-#if CONFIG_ESP32_TRAX_TWOBANKS
+#if (CONFIG_IDF_TARGET_ESP32 && CONFIG_ESP32_TRAX_TWOBANKS) || \
+    (CONFIG_IDF_TARGET_ESP32S3 && CONFIG_ESP32S3_TRAX_TWOBANKS)
     trax_start_trace(TRAX_DOWNCOUNT_WORDS);
-#endif
 #endif
 
     s_cpu_inited[1] = true;
@@ -253,6 +247,39 @@ static void start_other_core(void)
         }
         esp_rom_delay_us(100);
     }
+}
+
+// This function is needed to make the multicore app runnable on a unicore bootloader (built with FREERTOS UNICORE).
+// It does some cache settings for other CPUs.
+void IRAM_ATTR do_multicore_settings(void)
+{
+    // We intentionally do not check the cache settings before changing them,
+    // because it helps to get the application to run on older bootloaders.
+#ifdef CONFIG_IDF_TARGET_ESP32
+    if (!efuse_ll_get_disable_app_cpu()) {
+        Cache_Read_Disable(1);
+        Cache_Flush(1);
+        DPORT_REG_SET_BIT(DPORT_APP_CACHE_CTRL1_REG, DPORT_APP_CACHE_MMU_IA_CLR);
+        DPORT_REG_CLR_BIT(DPORT_APP_CACHE_CTRL1_REG, DPORT_APP_CACHE_MMU_IA_CLR);
+        // We do not enable cache for CPU1 now because it will be done later in start_other_core().
+    }
+#endif
+
+    cache_bus_mask_t cache_bus_mask_core0 = cache_ll_l1_get_enabled_bus(0);
+#ifndef CONFIG_IDF_TARGET_ESP32
+    // 1. disable the cache before changing its settings.
+    Cache_Disable_ICache();
+    Cache_Disable_DCache();
+#endif
+    for (unsigned core = 1; core < SOC_CPU_CORES_NUM; core++) {
+        // 2. change cache settings. All cores must have the same settings.
+        cache_ll_l1_enable_bus(core, cache_bus_mask_core0);
+    }
+#ifndef CONFIG_IDF_TARGET_ESP32
+    // 3. enable the cache after changing its settings.
+    Cache_Enable_ICache(0);
+    Cache_Enable_DCache(0);
+#endif
 }
 #endif // !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
 
@@ -322,6 +349,14 @@ void IRAM_ATTR call_start_cpu0(void)
         memset(&_rtc_bss_start, 0, (&_rtc_bss_end - &_rtc_bss_start) * sizeof(_rtc_bss_start));
     }
 
+#if CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
+    ESP_EARLY_LOGI(TAG, "Unicore app");
+#else
+    ESP_EARLY_LOGI(TAG, "Multicore app");
+    // It helps to fix missed cache settings for other cores. It happens when bootloader is unicore.
+    do_multicore_settings();
+#endif
+
 #if CONFIG_IDF_TARGET_ESP32S2
     /* Configure the mode of instruction cache : cache size, cache associated ways, cache line size. */
     extern void esp_config_instruction_cache_mode(void);
@@ -348,7 +383,15 @@ void IRAM_ATTR call_start_cpu0(void)
     extern void rom_config_data_cache_mode(uint32_t cfg_cache_size, uint8_t cfg_cache_ways, uint8_t cfg_cache_line_size);
     rom_config_data_cache_mode(CONFIG_ESP32S3_DATA_CACHE_SIZE, CONFIG_ESP32S3_DCACHE_ASSOCIATED_WAYS, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE);
     Cache_Resume_DCache(0);
+
+    /*add lock to protect cache operation*/
+    extern void esp_cache_op_lock_init(void);
+    esp_cache_op_lock_init();
 #endif // CONFIG_IDF_TARGET_ESP32S3
+
+    if (esp_efuse_check_errors() != ESP_OK) {
+        esp_restart();
+    }
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32H2
     /* Configure the Cache MMU size for instruction and rodata in flash. */
@@ -359,7 +402,7 @@ void IRAM_ATTR call_start_cpu0(void)
 
 #if CONFIG_IDF_TARGET_ESP32S3
     extern int _rodata_reserved_end;
-    uint32_t cache_mmu_drom_size = (((uint32_t)&_rodata_reserved_end - rodata_reserved_start_align + MMU_PAGE_SIZE - 1)/MMU_PAGE_SIZE)*sizeof(uint32_t);
+    uint32_t cache_mmu_drom_size = (((uint32_t)&_rodata_reserved_end - rodata_reserved_start_align + MMU_PAGE_SIZE - 1) / MMU_PAGE_SIZE) * sizeof(uint32_t);
 #endif
 
     Cache_Set_IDROM_MMU_Size(cache_mmu_irom_size, CACHE_DROM_MMU_MAX_END - cache_mmu_irom_size);
@@ -384,8 +427,16 @@ void IRAM_ATTR call_start_cpu0(void)
      * In this stage, we re-configure the Flash (and MSPI) to required configuration
      */
     spi_flash_init_chip_state();
+
+    // In earlier version of ESP-IDF, the PLL provided by bootloader is not stable enough.
+    // Do calibration again here so that we can use better clock for the timing tuning.
+#if CONFIG_ESP_SYSTEM_BBPLL_RECALIB
+    extern void rtc_clk_recalib_bbpll(void);
+    rtc_clk_recalib_bbpll();
+#endif
 #if CONFIG_IDF_TARGET_ESP32S3
-    //On other chips, this feature is not provided by HW, or hasn't been tested yet.
+    // This function needs to be called when PLL is enabled
+    // On other chips, this feature is not provided by HW, or hasn't been tested yet.
     spi_timing_flash_tuning();
 #endif
 
@@ -476,12 +527,12 @@ void IRAM_ATTR call_start_cpu0(void)
 #endif
 
     extern void Cache_Set_IDROM_MMU_Info(uint32_t instr_page_num, uint32_t rodata_page_num, uint32_t rodata_start, uint32_t rodata_end, int i_off, int ro_off);
-    Cache_Set_IDROM_MMU_Info(cache_mmu_irom_size/sizeof(uint32_t), \
-                            cache_mmu_drom_size/sizeof(uint32_t), \
-                            (uint32_t)&_rodata_reserved_start, \
-                            (uint32_t)&_rodata_reserved_end, \
-                            s_instr_flash2spiram_off, \
-                            s_rodata_flash2spiram_off);
+    Cache_Set_IDROM_MMU_Info(cache_mmu_irom_size / sizeof(uint32_t), \
+                             cache_mmu_drom_size / sizeof(uint32_t), \
+                             (uint32_t)&_rodata_reserved_start, \
+                             (uint32_t)&_rodata_reserved_end, \
+                             s_instr_flash2spiram_off, \
+                             s_rodata_flash2spiram_off);
 #endif
 
 #if CONFIG_ESP32S2_INSTRUCTION_CACHE_WRAP || CONFIG_ESP32S2_DATA_CACHE_WRAP || \
@@ -507,9 +558,9 @@ void IRAM_ATTR call_start_cpu0(void)
 #endif
 
 //Enable trace memory and immediately start trace.
-#if CONFIG_ESP32_TRAX || CONFIG_ESP32S2_TRAX
-#if CONFIG_IDF_TARGET_ESP32
-#if CONFIG_ESP32_TRAX_TWOBANKS
+#if CONFIG_ESP32_TRAX || CONFIG_ESP32S2_TRAX || CONFIG_ESP32S3_TRAX
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_ESP32_TRAX_TWOBANKS || CONFIG_ESP32S3_TRAX_TWOBANKS
     trax_enable(TRAX_ENA_PRO_APP);
 #else
     trax_enable(TRAX_ENA_PRO);
@@ -518,7 +569,7 @@ void IRAM_ATTR call_start_cpu0(void)
     trax_enable(TRAX_ENA_PRO);
 #endif
     trax_start_trace(TRAX_DOWNCOUNT_WORDS);
-#endif // CONFIG_ESP32_TRAX || CONFIG_ESP32S2_TRAX
+#endif // CONFIG_ESP32_TRAX || CONFIG_ESP32S2_TRAX || CONFIG_ESP32S3_TRAX
 
     esp_clk_init();
     esp_perip_clk_init();
@@ -541,40 +592,48 @@ void IRAM_ATTR call_start_cpu0(void)
 #endif
 #endif
 
-#if SOC_RTCIO_HOLD_SUPPORTED
-    rtcio_hal_unhold_all();
-#else
-    gpio_hal_force_unhold_all();
-#endif
+    // Need to unhold the IOs that were hold right before entering deep sleep, which are used as wakeup pins
+    if (rst_reas[0] == RESET_REASON_CORE_DEEP_SLEEP) {
+        esp_deep_sleep_wakeup_io_reset();
+    }
 
     esp_cache_err_int_init();
 
-#if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
+#if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE && !CONFIG_ESP_SYSTEM_MEMPROT_TEST
     // Memprot cannot be locked during OS startup as the lock-on prevents any PMS changes until a next reboot
     // If such a situation appears, it is likely an malicious attempt to bypass the system safety setup -> print error & reset
+
+#if CONFIG_IDF_TARGET_ESP32S2
     if (esp_memprot_is_locked_any()) {
+#else
+    bool is_locked = false;
+    if (esp_mprot_is_conf_locked_any(&is_locked) != ESP_OK || is_locked) {
+#endif
         ESP_EARLY_LOGE(TAG, "Memprot feature locked after the system reset! Potential safety corruption, rebooting.");
         esp_restart_noos_dig();
     }
+
+    //default configuration of PMS Memprot
     esp_err_t memp_err = ESP_OK;
+#if CONFIG_IDF_TARGET_ESP32S2 //specific for ESP32S2 unless IDF-3024 is merged
 #if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE_LOCK
-#if CONFIG_IDF_TARGET_ESP32S2 //specific for ESP32S2 unless IDF-3024 is merged
-    memp_err = esp_memprot_set_prot(true, true, NULL);
+    memp_err = esp_memprot_set_prot(PANIC_HNDL_ON, MEMPROT_LOCK, NULL);
 #else
-    esp_memprot_set_prot(true, true, NULL);
+    memp_err = esp_memprot_set_prot(PANIC_HNDL_ON, MEMPROT_UNLOCK, NULL);
 #endif
-#else
-#if CONFIG_IDF_TARGET_ESP32S2 //specific for ESP32S2 unless IDF-3024 is merged
-    memp_err = esp_memprot_set_prot(true, false, NULL);
-#else
-    esp_memprot_set_prot(true, false, NULL);
+#else //CONFIG_IDF_TARGET_ESP32S2 specific end
+    esp_memp_config_t memp_cfg = ESP_MEMPROT_DEFAULT_CONFIG();
+#if !CONFIG_ESP_SYSTEM_MEMPROT_FEATURE_LOCK
+    memp_cfg.lock_feature = false;
 #endif
-#endif
+    memp_err = esp_mprot_set_prot(&memp_cfg);
+#endif //other IDF_TARGETS end
+
     if (memp_err != ESP_OK) {
-        ESP_EARLY_LOGE(TAG, "Failed to set Memprot feature (error 0x%08X), rebooting.", memp_err);
+        ESP_EARLY_LOGE(TAG, "Failed to set Memprot feature (0x%08X: %s), rebooting.", memp_err, esp_err_to_name(memp_err));
         esp_restart_noos_dig();
     }
-#endif
+#endif //CONFIG_ESP_SYSTEM_MEMPROT_FEATURE && !CONFIG_ESP_SYSTEM_MEMPROT_TEST
 
     // Read the application binary image header. This will also decrypt the header if the image is encrypted.
     __attribute__((unused)) esp_image_header_t fhdr = {0};
@@ -605,7 +664,7 @@ void IRAM_ATTR call_start_cpu0(void)
 #if CONFIG_SPI_FLASH_SIZE_OVERRIDE
     int app_flash_size = esp_image_get_flash_size(fhdr.spi_size);
     if (app_flash_size < 1 * 1024 * 1024) {
-        ESP_LOGE(TAG, "Invalid flash size in app image header.");
+        ESP_EARLY_LOGE(TAG, "Invalid flash size in app image header.");
         abort();
     }
     bootloader_flash_update_size(app_flash_size);
@@ -623,10 +682,6 @@ void IRAM_ATTR call_start_cpu0(void)
         }
         esp_rom_delay_us(100);
     }
-#endif
-
-#ifdef ROM_LOG_MODE
-    esp_efuse_set_rom_log_scheme(ROM_LOG_MODE);
 #endif
 
     SYS_STARTUP_FN();

@@ -1,9 +1,11 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 
+default_stages: [commit]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.0.1
+    rev: v4.5.0
     hooks:
       - id: trailing-whitespace
         # note: whitespace exclusions use multiline regex, see https://pre-commit.com/#regular-expressions
@@ -12,12 +14,16 @@ repos:
         # 2 - any file matching *test*/*expected* (for host tests, if possible use this naming pattern always)
         # 3 - any directory named 'testdata'
         # 4 - IDF monitor test data
+        # 5 - protobuf auto-generated files
         exclude: &whitespace_excludes |
           (?x)^(
             .+\.(md|rst|map|bin)|
             .+test.*\/.*expected.*|
             .+\/testdata\/.+|
-            .+test_idf_monitor\/tests\/.+
+            .+test_idf_monitor\/tests\/.+|
+            .*_pb2.py|
+            .*.pb-c.h|
+            .*.pb-c.c
           )$
       - id: end-of-file-fixer
         exclude: *whitespace_excludes
@@ -25,16 +31,22 @@ repos:
       - id: mixed-line-ending
         args: ['-f=lf']
       - id: double-quote-string-fixer
-  - repo: https://gitlab.com/pycqa/flake8
+  - repo: https://github.com/PyCQA/flake8
     rev: 3.9.2
     hooks:
       - id: flake8
         args: ['--config=.flake8', '--tee', '--benchmark']
-  - repo: https://github.com/pycqa/isort
-    rev: 5.9.3
+  - repo: https://github.com/asottile/reorder-python-imports
+    rev: v3.12.0
     hooks:
-      - id: isort
-        name: isort (python)
+      - id: reorder-python-imports
+        name: Reorder Python imports
+        args: [--py36-plus]
+        exclude: >
+          (?x)^(
+              .*_pb2.py
+          )$
+
   - repo: local
     hooks:
       - id: check-executables
@@ -93,8 +105,12 @@ repos:
         name: Check type annotations in python files
         entry: tools/ci/check_type_comments.py
         additional_dependencies:
-          - 'mypy==0.800'
-          - 'mypy-extensions==0.4.3'
+          - 'mypy==1.0.1'
+          - 'mypy-extensions==1.0.0'
+        exclude: >
+          (?x)^(
+              .*_pb2.py
+          )$
         language: python
         types: [python]
       - id: check-tools-files-patterns
@@ -110,3 +126,8 @@ repos:
     hooks:
       - id: file-contents-sorter
         files: 'tools\/ci\/(executable-list\.txt|mypy_ignore_list\.txt)'
+  - repo: https://github.com/espressif/esp-idf-sbom.git
+    rev: v0.13.0
+    hooks:
+      - id: validate-sbom-manifest
+        stages: [post-commit]

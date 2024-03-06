@@ -26,6 +26,9 @@
 #include "esp32h2/rom/ets_sys.h"
 #include "esp32h2/rom/uart.h"
 #endif
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+#include "hal/usb_phy_ll.h"
+#endif
 #include "esp_rom_gpio.h"
 #include "esp_rom_uart.h"
 #include "esp_rom_sys.h"
@@ -44,12 +47,7 @@ void bootloader_console_init(void)
 {
     const int uart_num = CONFIG_ESP_CONSOLE_UART_NUM;
 
-#if !ESP_ROM_SUPPORT_MULTIPLE_UART
-    /* esp_rom_install_channel_put is not available unless multiple UARTs are supported */
     esp_rom_install_uart_printf();
-#else
-    esp_rom_install_channel_putc(1, esp_rom_uart_putc);
-#endif
 
     // Wait for UART FIFO to be empty.
     esp_rom_uart_tx_wait_idle(0);
@@ -58,10 +56,10 @@ void bootloader_console_init(void)
     // Some constants to make the following code less upper-case
     const int uart_tx_gpio = CONFIG_ESP_CONSOLE_UART_TX_GPIO;
     const int uart_rx_gpio = CONFIG_ESP_CONSOLE_UART_RX_GPIO;
+
     // Switch to the new UART (this just changes UART number used for esp_rom_printf in ROM code).
-#if ESP_ROM_SUPPORT_MULTIPLE_UART
     esp_rom_uart_set_as_console(uart_num);
-#endif
+
     // If console is attached to UART1 or if non-default pins are used,
     // need to reconfigure pins using GPIO matrix
     if (uart_num != 0 ||
@@ -73,10 +71,12 @@ void bootloader_console_init(void)
         // Route GPIO signals to/from pins
         const uint32_t tx_idx = UART_PERIPH_SIGNAL(uart_num, SOC_UART_TX_PIN_IDX);
         const uint32_t rx_idx = UART_PERIPH_SIGNAL(uart_num, SOC_UART_RX_PIN_IDX);
+        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[uart_rx_gpio], PIN_FUNC_GPIO);
         PIN_INPUT_ENABLE(GPIO_PIN_MUX_REG[uart_rx_gpio]);
         esp_rom_gpio_pad_pullup_only(uart_rx_gpio);
         esp_rom_gpio_connect_out_signal(uart_tx_gpio, tx_idx, 0, 0);
         esp_rom_gpio_connect_in_signal(uart_rx_gpio, rx_idx, 0);
+        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[uart_tx_gpio], PIN_FUNC_GPIO);
         // Enable the peripheral
         periph_ll_enable_clk_clear_rst(PERIPH_UART0_MODULE + uart_num);
     }
@@ -107,6 +107,10 @@ void bootloader_console_init(void)
     esp_rom_uart_usb_acm_init(s_usb_cdc_buf, sizeof(s_usb_cdc_buf));
     esp_rom_uart_set_as_console(ESP_ROM_UART_USB);
     esp_rom_install_channel_putc(1, bootloader_console_write_char_usb);
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    usb_phy_ll_usb_wrap_pad_enable(&USB_WRAP, true);
+    usb_phy_ll_int_otg_enable(&USB_WRAP);
+#endif
 }
 #endif //CONFIG_ESP_CONSOLE_USB_CDC
 

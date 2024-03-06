@@ -69,8 +69,8 @@ void example_i2s_init(void)
         .communication_format = I2S_COMM_FORMAT_STAND_MSB,
         .channel_format = EXAMPLE_I2S_FORMAT,
         .intr_alloc_flags = 0,
-        .dma_buf_count = 2,
-        .dma_buf_len = 1024,
+        .dma_buf_count = 6,
+        .dma_buf_len = 256,
         .use_apll = 1,
      };
      //install and start i2s driver
@@ -274,7 +274,7 @@ void adc_read_task(void* arg)
     adc1_config_width(ADC_WIDTH_12Bit);
     adc1_config_channel_atten(ADC1_TEST_CHANNEL, ADC_ATTEN_11db);
     esp_adc_cal_characteristics_t characteristics;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12, V_REF, &characteristics);
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, V_REF, &characteristics);
     while(1) {
         uint32_t voltage;
         esp_adc_cal_get_voltage(ADC1_TEST_CHANNEL, &characteristics, &voltage);

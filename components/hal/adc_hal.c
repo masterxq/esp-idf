@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,6 +14,7 @@
 
 #if CONFIG_IDF_TARGET_ESP32
 //ADC utilises I2S0 DMA on ESP32
+#include "hal/i2s_hal.h"
 #include "hal/i2s_ll.h"
 #include "hal/i2s_types.h"
 #include "soc/i2s_struct.h"
@@ -232,14 +233,21 @@ static void adc_hal_digi_sample_freq_config(adc_hal_context_t *hal, uint32_t fre
     adc_ll_digi_clk_sel(0);   //use APB
 #else
     i2s_ll_rx_clk_set_src(hal->dev, I2S_CLK_D2CLK);    /*!< Clock from PLL_D2_CLK(160M)*/
-    uint32_t bck = I2S_BASE_CLK / (ADC_LL_CLKM_DIV_NUM_DEFAULT + ADC_LL_CLKM_DIV_B_DEFAULT / ADC_LL_CLKM_DIV_A_DEFAULT) / 2 / freq;
-    i2s_ll_mclk_div_t clk = {
-        .mclk_div = ADC_LL_CLKM_DIV_NUM_DEFAULT,
-        .a = ADC_LL_CLKM_DIV_A_DEFAULT,
-        .b = ADC_LL_CLKM_DIV_B_DEFAULT,
+    uint32_t bclk_div = 16;
+    uint32_t bclk = freq * 2;
+    uint32_t mclk = bclk * bclk_div;
+    uint32_t mclk_div = I2S_BASE_CLK / mclk;
+    i2s_hal_clock_cfg_t i2s_hal_clk_cfg = {
+        .sclk = I2S_BASE_CLK,
+        .bclk = bclk,
+        .bclk_div = bclk_div,
+        .mclk = mclk ,
+        .mclk_div = mclk_div,
     };
-    i2s_ll_rx_set_clk(hal->dev, &clk);
-    i2s_ll_rx_set_bck_div_num(hal->dev, bck);
+    i2s_ll_mclk_div_t mclk_set = {};
+    i2s_hal_mclk_div_decimal_cal(&i2s_hal_clk_cfg, &mclk_set);
+    i2s_ll_rx_set_clk(hal->dev, &mclk_set);
+    i2s_ll_rx_set_bck_div_num(hal->dev, i2s_hal_clk_cfg.bclk_div);
 #endif
 }
 
@@ -295,7 +303,8 @@ void adc_hal_context_config(adc_hal_context_t *hal, const adc_hal_config_t *conf
 {
     hal->desc_dummy_head.next = hal->rx_desc;
     hal->dev = config->dev;
-    hal->desc_max_num = config->desc_max_num;
+    hal->eof_desc_num = config->eof_desc_num;
+    hal->eof_step = config->eof_step;
     hal->dma_chan = config->dma_chan;
     hal->eof_num = config->eof_num;
 }
@@ -317,25 +326,36 @@ void adc_hal_digi_init(adc_hal_context_t *hal)
 #endif
 }
 
-static void adc_hal_digi_dma_link_descriptors(dma_descriptor_t *desc, uint8_t *data_buf, uint32_t size, uint32_t num)
+static void adc_hal_digi_dma_link_descriptors(dma_descriptor_t *desc, uint8_t *data_buf, uint32_t per_eof_size, uint32_t eof_step, uint32_t eof_num)
 {
     HAL_ASSERT(((uint32_t)data_buf % 4) == 0);
-    HAL_ASSERT((size % 4) == 0);
+    HAL_ASSERT((per_eof_size % 4) == 0);
     uint32_t n = 0;
+    dma_descriptor_t *desc_head = desc;
 
-    while (num--) {
-        desc[n] = (dma_descriptor_t) {
-            .dw0.size = size,
-            .dw0.length = 0,
-            .dw0.suc_eof = 0,
-            .dw0.owner = 1,
-            .buffer = data_buf,
-            .next = &desc[n+1]
-        };
-        data_buf += size;
-        n++;
+    while (eof_num--) {
+        uint32_t eof_size = per_eof_size;
+
+        for (int i = 0; i < eof_step; i++) {
+            uint32_t this_len = eof_size;
+            if (this_len > DMA_DESCRIPTOR_BUFFER_MAX_SIZE_4B_ALIGNED) {
+                this_len = DMA_DESCRIPTOR_BUFFER_MAX_SIZE_4B_ALIGNED;
+            }
+
+            desc[n] = (dma_descriptor_t) {
+                .dw0.size = this_len,
+                .dw0.length = 0,
+                .dw0.suc_eof = 0,
+                .dw0.owner = 1,
+                .buffer = data_buf,
+                .next = &desc[n+1]
+            };
+            eof_size -= this_len;
+            data_buf += this_len;
+            n++;
+        }
     }
-    desc[n-1].next = NULL;
+    desc[n-1].next = desc_head;
 }
 
 void adc_hal_digi_start(adc_hal_context_t *hal, uint8_t *data_buf)
@@ -350,7 +370,7 @@ void adc_hal_digi_start(adc_hal_context_t *hal, uint8_t *data_buf)
 
     //reset the current descriptor address
     hal->cur_desc_ptr = &hal->desc_dummy_head;
-    adc_hal_digi_dma_link_descriptors(hal->rx_desc, data_buf, hal->eof_num * ADC_HAL_DATA_LEN_PER_CONV, hal->desc_max_num);
+    adc_hal_digi_dma_link_descriptors(hal->rx_desc, data_buf, hal->eof_num * SOC_ADC_DIGI_DATA_BYTES_PER_CONV, hal->eof_step, hal->eof_desc_num);
 
     //start DMA
     adc_dma_ll_rx_start(hal->dev, hal->dma_chan, (lldesc_t *)hal->rx_desc);
@@ -372,18 +392,46 @@ bool adc_hal_check_event(adc_hal_context_t *hal, uint32_t mask)
 }
 #endif  //#if !SOC_GDMA_SUPPORTED
 
-adc_hal_dma_desc_status_t adc_hal_get_reading_result(adc_hal_context_t *hal, const intptr_t eof_desc_addr, dma_descriptor_t **cur_desc)
+adc_hal_dma_desc_status_t adc_hal_get_reading_result(adc_hal_context_t *hal, const intptr_t eof_desc_addr, uint8_t **buffer, uint32_t *len)
 {
     HAL_ASSERT(hal->cur_desc_ptr);
+
     if (!hal->cur_desc_ptr->next) {
         return ADC_HAL_DMA_DESC_NULL;
     }
+
     if ((intptr_t)hal->cur_desc_ptr == eof_desc_addr) {
         return ADC_HAL_DMA_DESC_WAITING;
     }
 
-    hal->cur_desc_ptr = hal->cur_desc_ptr->next;
-    *cur_desc = hal->cur_desc_ptr;
+    uint8_t *buffer_start = NULL;
+    uint32_t eof_len = 0;
+    dma_descriptor_t *eof_desc = hal->cur_desc_ptr;
+
+    //Find the eof list start
+    eof_desc = eof_desc->next;
+    eof_desc->dw0.owner = 1;
+    buffer_start = eof_desc->buffer;
+    eof_len += eof_desc->dw0.length;
+    if ((intptr_t)eof_desc == eof_desc_addr) {
+        goto valid;
+    }
+
+    //Find the eof list end
+    for (int i = 1; i < hal->eof_step; i++) {
+        eof_desc = eof_desc->next;
+        eof_desc->dw0.owner = 1;
+        eof_len += eof_desc->dw0.length;
+        if ((intptr_t)eof_desc == eof_desc_addr) {
+            goto valid;
+        }
+    }
+
+
+valid:
+    hal->cur_desc_ptr = eof_desc;
+    *buffer = buffer_start;
+    *len = eof_len;
 
     return ADC_HAL_DMA_DESC_VALID;
 }
@@ -443,6 +491,8 @@ static bool adc_hal_intr_get_raw(adc_hal_event_t event)
 //--------------------Single Read-------------------------------//
 static void adc_hal_onetime_start(void)
 {
+    adc_ll_digi_controller_clk_div(ADC_LL_CLKM_DIV_NUM_DEFAULT, ADC_LL_CLKM_DIV_B_DEFAULT, ADC_LL_CLKM_DIV_A_DEFAULT);
+    adc_ll_digi_set_clk_div(SOC_ADC_DIGI_SAR_CLK_DIV_DEFAULT);
     /**
      * There is a hardware limitation. If the APB clock frequency is high, the step of this reg signal: ``onetime_start`` may not be captured by the
      * ADC digital controller (when its clock frequency is too slow). A rough estimate for this step should be at least 3 ADC digital controller
@@ -566,8 +616,8 @@ static uint32_t read_cal_channel(adc_ll_num_t adc_n, int channel)
     return (uint32_t)adc_ll_rtc_get_convert_value(adc_n);
 }
 
-#elif SOC_ADC_DIG_CTRL_SUPPORTED && !SOC_ADC_RTC_CTRL_SUPPORTED
 //For those RTC controller not supported chips, they use digital controller to do the single read. e.g.: esp32c3
+#elif SOC_ADC_DIG_CTRL_SUPPORTED && !SOC_ADC_RTC_CTRL_SUPPORTED
 static void cal_setup(adc_ll_num_t adc_n, adc_channel_t channel, adc_atten_t atten, bool internal_gnd)
 {
     adc_ll_onetime_sample_enable(ADC_NUM_1, false);

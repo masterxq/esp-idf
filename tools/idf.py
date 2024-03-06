@@ -33,7 +33,7 @@ sys.dont_write_bytecode = True
 
 import python_version_checker  # noqa: E402
 from idf_py_actions.errors import FatalError  # noqa: E402
-from idf_py_actions.tools import executable_exists, idf_version, merge_action_lists, realpath  # noqa: E402
+from idf_py_actions.tools import executable_exists, idf_version, merge_action_lists  # noqa: E402
 
 # Use this Python interpreter for any subprocesses we launch
 PYTHON = sys.executable
@@ -69,9 +69,9 @@ def check_environment():
 
     # verify that IDF_PATH env variable is set
     # find the directory idf.py is in, then the parent directory of this, and assume this is IDF_PATH
-    detected_idf_path = realpath(os.path.join(os.path.dirname(__file__), '..'))
+    detected_idf_path = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
     if 'IDF_PATH' in os.environ:
-        set_idf_path = realpath(os.environ['IDF_PATH'])
+        set_idf_path = os.path.realpath(os.environ['IDF_PATH'])
         if set_idf_path != detected_idf_path:
             print_warning(
                 'WARNING: IDF_PATH environment variable is set to %s but %s path indicates IDF directory %s. '
@@ -559,9 +559,14 @@ def init_cli(verbose_output=None):
                         default = () if option.multiple else option.default
 
                         if global_value != default and local_value != default and global_value != local_value:
-                            raise FatalError(
-                                'Option "%s" provided for "%s" is already defined to a different value. '
-                                'This option can appear at most once in the command line.' % (key, task.name))
+                            if hasattr(option, 'envvar') and option.envvar and os.getenv(option.envvar) != default:
+                                msg = (f'This option cannot be set in command line if the {option.envvar} '
+                                       'environment variable is set to a different value.')
+                            else:
+                                msg = 'This option can appear at most once in the command line.'
+
+                            raise FatalError(f'Option "{key}" provided for "{task.name}" is already defined to '
+                                             f'a different value. {msg}')
                         if local_value != default:
                             global_args[key] = local_value
 
@@ -650,18 +655,19 @@ def init_cli(verbose_output=None):
     )
     @click.option('-C', '--project-dir', default=os.getcwd(), type=click.Path())
     def parse_project_dir(project_dir):
-        return realpath(project_dir)
+        return os.path.realpath(project_dir)
+
     # Set `complete_var` to not existing environment variable name to prevent early cmd completion
     project_dir = parse_project_dir(standalone_mode=False, complete_var='_IDF.PY_COMPLETE_NOT_EXISTING')
 
     all_actions = {}
     # Load extensions from components dir
     idf_py_extensions_path = os.path.join(os.environ['IDF_PATH'], 'tools', 'idf_py_actions')
-    extension_dirs = [realpath(idf_py_extensions_path)]
+    extension_dirs = [os.path.realpath(idf_py_extensions_path)]
     extra_paths = os.environ.get('IDF_EXTRA_ACTIONS_PATH')
     if extra_paths is not None:
         for path in extra_paths.split(';'):
-            path = realpath(path)
+            path = os.path.realpath(path)
             if path not in extension_dirs:
                 extension_dirs.append(path)
 
@@ -676,16 +682,18 @@ def init_cli(verbose_output=None):
             if name.endswith('_ext'):
                 extensions.append((name, import_module(name)))
 
-    # Load component manager if available and not explicitly disabled
-    if os.getenv('IDF_COMPONENT_MANAGER', None) != '0':
-        try:
-            from idf_component_manager import idf_extensions
+    # Load component manager idf.py extensions if not explicitly disabled
+    if os.getenv('IDF_COMPONENT_MANAGER') != '0':
+        from idf_component_manager import idf_extensions
+        extensions.append(('component_manager_ext', idf_extensions))
 
-            extensions.append(('component_manager_ext', idf_extensions))
-            os.environ['IDF_COMPONENT_MANAGER'] = '1'
+    # Optional load `pyclang` for additional clang-tidy related functionalities
+    try:
+        from pyclang import idf_extension
 
-        except ImportError:
-            pass
+        extensions.append(('idf_clang_tidy_ext', idf_extension))
+    except ImportError:
+        pass
 
     for name, extension in extensions:
         try:
@@ -700,7 +708,8 @@ def init_cli(verbose_output=None):
             from idf_ext import action_extensions
         except ImportError:
             print_warning('Error importing extension file idf_ext.py. Skipping.')
-            print_warning("Please make sure that it contains implementation (even if it's empty) of add_action_extensions")
+            print_warning(
+                "Please make sure that it contains implementation (even if it's empty) of add_action_extensions")
 
         try:
             all_actions = merge_action_lists(all_actions, action_extensions(all_actions, project_dir))

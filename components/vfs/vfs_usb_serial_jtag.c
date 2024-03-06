@@ -71,9 +71,14 @@ typedef struct {
     // Read and write locks, lazily initialized
     _lock_t read_lock;
     _lock_t write_lock;
-    // Non-blocking flag. Note: default implementation does not honor this
-    // flag, all reads are non-blocking. ToDo: implement driver that honours this.
+    // Non-blocking flag.
+    // The default implementation does not honor this flag, all reads
+    // are non-blocking.
+    // When the driver is used (via esp_vfs_usb_serial_jtag_use_driver),
+    // reads are either blocking or non-blocking depending on this flag.
     bool non_blocking;
+    // TX has already tried a blocking send.
+    bool tx_tried_blocking;
     // Newline conversion mode when transmitting
     esp_line_endings_t tx_mode;
     // Newline conversion mode when receiving
@@ -242,6 +247,7 @@ static int usb_serial_jtag_fcntl(int fd, int cmd, int arg)
 {
     int result = 0;
     if (cmd == F_GETFL) {
+        result |= O_RDWR;
         if (s_ctx.non_blocking) {
             result |= O_NONBLOCK;
         }
@@ -389,7 +395,8 @@ esp_err_t esp_vfs_dev_usb_serial_jtag_register(void)
 static int usbjtag_rx_char_via_driver(int fd)
 {
     uint8_t c;
-    int n = usb_serial_jtag_read_bytes(&c, 1, portMAX_DELAY);
+    TickType_t timeout = s_ctx.non_blocking ? 0 : portMAX_DELAY;
+    int n = usb_serial_jtag_read_bytes(&c, 1, timeout);
     if (n <= 0) {
         return NONE;
     }
@@ -399,7 +406,19 @@ static int usbjtag_rx_char_via_driver(int fd)
 static void usbjtag_tx_char_via_driver(int fd, int c)
 {
     char ch = (char) c;
-    usb_serial_jtag_write_bytes(&ch, 1, portMAX_DELAY);
+    TickType_t ticks = (TX_FLUSH_TIMEOUT_US / 1000) / portTICK_PERIOD_MS;
+    if (usb_serial_jtag_write_bytes(&ch, 1, 0) != 0) {
+        s_ctx.tx_tried_blocking = false;
+        return;
+    }
+
+    if (s_ctx.tx_tried_blocking == false) {
+        if (usb_serial_jtag_write_bytes(&ch, 1, ticks) != 0) {
+            return;
+        } else {
+            s_ctx.tx_tried_blocking = true;
+        }
+    }
 }
 
 void esp_vfs_usb_serial_jtag_use_nonblocking(void)

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,7 +8,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "test_utils.h"
+#include "freertos/task.h"
 #include "soc/usb_wrap_struct.h"
 #include "esp_intr_alloc.h"
 #include "esp_err.h"
@@ -19,6 +19,7 @@
 #include "usb/usb_types_ch9.h"
 #include "test_hcd_common.h"
 #include "test_usb_common.h"
+#include "unity.h"
 
 #define PORT_NUM                1
 #define EVENT_QUEUE_LEN         5
@@ -52,7 +53,7 @@ static bool port_callback(hcd_port_handle_t port_hdl, hcd_port_event_t port_even
     //We store the port's queue handle in the port's context variable
     void *port_ctx = hcd_port_get_context(port_hdl);
     QueueHandle_t port_evt_queue = (QueueHandle_t)port_ctx;
-    TEST_ASSERT(in_isr);    //Current HCD implementation should never call a port callback in a task context
+    TEST_ASSERT_TRUE(in_isr);    //Current HCD implementation should never call a port callback in a task context
     port_event_msg_t msg = {
         .port_hdl = port_hdl,
         .port_event = port_event,
@@ -95,13 +96,14 @@ void test_hcd_expect_port_event(hcd_port_handle_t port_hdl, hcd_port_event_t exp
 {
     //Get the port event queue from the port's context variable
     QueueHandle_t port_evt_queue = (QueueHandle_t)hcd_port_get_context(port_hdl);
-    TEST_ASSERT_NOT_EQUAL(NULL, port_evt_queue);
+    TEST_ASSERT_NOT_NULL(port_evt_queue);
     //Wait for port callback to send an event message
     port_event_msg_t msg;
-    xQueueReceive(port_evt_queue, &msg, portMAX_DELAY);
+    BaseType_t ret = xQueueReceive(port_evt_queue, &msg, pdMS_TO_TICKS(5000));
+    TEST_ASSERT_EQUAL_MESSAGE(pdPASS, ret, "Port event not generated on time");
     //Check the contents of that event message
     TEST_ASSERT_EQUAL(port_hdl, msg.port_hdl);
-    TEST_ASSERT_EQUAL(expected_event, msg.port_event);
+    TEST_ASSERT_EQUAL_MESSAGE(expected_event, msg.port_event, "Unexpected event");
     printf("\t-> Port event\n");
 }
 
@@ -109,20 +111,21 @@ void test_hcd_expect_pipe_event(hcd_pipe_handle_t pipe_hdl, hcd_pipe_event_t exp
 {
     //Get the pipe's event queue from the pipe's context variable
     QueueHandle_t pipe_evt_queue = (QueueHandle_t)hcd_pipe_get_context(pipe_hdl);
-    TEST_ASSERT_NOT_EQUAL(NULL, pipe_evt_queue);
+    TEST_ASSERT_NOT_NULL(pipe_evt_queue);
     //Wait for pipe callback to send an event message
     pipe_event_msg_t msg;
-    xQueueReceive(pipe_evt_queue, &msg, portMAX_DELAY);
+    BaseType_t ret =  xQueueReceive(pipe_evt_queue, &msg, pdMS_TO_TICKS(5000));
+    TEST_ASSERT_EQUAL_MESSAGE(pdPASS, ret, "Pipe event not generated on time");
     //Check the contents of that event message
     TEST_ASSERT_EQUAL(pipe_hdl, msg.pipe_hdl);
-    TEST_ASSERT_EQUAL(expected_event, msg.pipe_event);
+    TEST_ASSERT_EQUAL_MESSAGE(expected_event, msg.pipe_event, "Unexpected event");
 }
 
 int test_hcd_get_num_port_events(hcd_port_handle_t port_hdl)
 {
     //Get the port event queue from the port's context variable
     QueueHandle_t port_evt_queue = (QueueHandle_t)hcd_port_get_context(port_hdl);
-    TEST_ASSERT_NOT_EQUAL(NULL, port_evt_queue);
+    TEST_ASSERT_NOT_NULL(port_evt_queue);
     return EVENT_QUEUE_LEN - uxQueueSpacesAvailable(port_evt_queue);
 }
 
@@ -130,7 +133,7 @@ int test_hcd_get_num_pipe_events(hcd_pipe_handle_t pipe_hdl)
 {
     //Get the pipe's event queue from the pipe's context variable
     QueueHandle_t pipe_evt_queue = (QueueHandle_t)hcd_pipe_get_context(pipe_hdl);
-    TEST_ASSERT_NOT_EQUAL(NULL, pipe_evt_queue);
+    TEST_ASSERT_NOT_NULL(pipe_evt_queue);
     return EVENT_QUEUE_LEN - uxQueueSpacesAvailable(pipe_evt_queue);
 }
 
@@ -138,9 +141,10 @@ int test_hcd_get_num_pipe_events(hcd_pipe_handle_t pipe_hdl)
 
 hcd_port_handle_t test_hcd_setup(void)
 {
+    test_usb_init_phy();    //Initialize the internal USB PHY and USB Controller for testing
     //Create a queue for port callback to queue up port events
     QueueHandle_t port_evt_queue = xQueueCreate(EVENT_QUEUE_LEN, sizeof(port_event_msg_t));
-    TEST_ASSERT_NOT_EQUAL(NULL, port_evt_queue);
+    TEST_ASSERT_NOT_NULL(port_evt_queue);
     //Install HCD
     hcd_config_t hcd_config = {
         .intr_flags = ESP_INTR_FLAG_LEVEL1,
@@ -155,22 +159,26 @@ hcd_port_handle_t test_hcd_setup(void)
     };
     hcd_port_handle_t port_hdl;
     TEST_ASSERT_EQUAL(ESP_OK, hcd_port_init(PORT_NUM, &port_config, &port_hdl));
-    TEST_ASSERT_NOT_EQUAL(NULL, port_hdl);
+    TEST_ASSERT_NOT_NULL(port_hdl);
     TEST_ASSERT_EQUAL(HCD_PORT_STATE_NOT_POWERED, hcd_port_get_state(port_hdl));
-    test_usb_force_conn_state(false, 0);    //Force disconnected state on PHY
+    test_usb_set_phy_state(false, 0);    //Force disconnected state on PHY
     return port_hdl;
 }
 
 void test_hcd_teardown(hcd_port_handle_t port_hdl)
 {
+    if (!port_hdl) {
+        return; // In case of setup stage failure, don't run tear-down stage
+    }
     //Get the queue handle from the port's context variable
     QueueHandle_t port_evt_queue = (QueueHandle_t)hcd_port_get_context(port_hdl);
-    TEST_ASSERT_NOT_EQUAL(NULL, port_evt_queue);
+    TEST_ASSERT_NOT_NULL(port_evt_queue);
     //Deinitialize a port
     TEST_ASSERT_EQUAL(ESP_OK, hcd_port_deinit(port_hdl));
     //Uninstall the HCD
     TEST_ASSERT_EQUAL(ESP_OK, hcd_uninstall());
     vQueueDelete(port_evt_queue);
+    test_usb_deinit_phy();  //Deinitialize the internal USB PHY after testing
 }
 
 usb_speed_t test_hcd_wait_for_conn(hcd_port_handle_t port_hdl)
@@ -180,7 +188,7 @@ usb_speed_t test_hcd_wait_for_conn(hcd_port_handle_t port_hdl)
     TEST_ASSERT_EQUAL(HCD_PORT_STATE_DISCONNECTED, hcd_port_get_state(port_hdl));
     //Wait for connection event
     printf("Waiting for connection\n");
-    test_usb_force_conn_state(true, pdMS_TO_TICKS(100));     //Allow for connected state on PHY
+    test_usb_set_phy_state(true, pdMS_TO_TICKS(100));     //Allow for connected state on PHY
     test_hcd_expect_port_event(port_hdl, HCD_PORT_EVENT_CONNECTION);
     TEST_ASSERT_EQUAL(HCD_PORT_EVENT_CONNECTION, hcd_port_handle_event(port_hdl));
     TEST_ASSERT_EQUAL(HCD_PORT_STATE_DISABLED, hcd_port_get_state(port_hdl));
@@ -209,7 +217,7 @@ void test_hcd_wait_for_disconn(hcd_port_handle_t port_hdl, bool already_disabled
     }
     //Wait for a safe disconnect
     printf("Waiting for disconnection\n");
-    test_usb_force_conn_state(false, pdMS_TO_TICKS(100));    //Force disconnected state on PHY
+    test_usb_set_phy_state(false, pdMS_TO_TICKS(100));    //Force disconnected state on PHY
     test_hcd_expect_port_event(port_hdl, HCD_PORT_EVENT_DISCONNECTION);
     TEST_ASSERT_EQUAL(HCD_PORT_EVENT_DISCONNECTION, hcd_port_handle_event(port_hdl));
     TEST_ASSERT_EQUAL(HCD_PORT_STATE_RECOVERY, hcd_port_get_state(port_hdl));
@@ -224,7 +232,7 @@ hcd_pipe_handle_t test_hcd_pipe_alloc(hcd_port_handle_t port_hdl, const usb_ep_d
 {
     //Create a queue for pipe callback to queue up pipe events
     QueueHandle_t pipe_evt_queue = xQueueCreate(EVENT_QUEUE_LEN, sizeof(pipe_event_msg_t));
-    TEST_ASSERT_NOT_EQUAL(NULL, pipe_evt_queue);
+    TEST_ASSERT_NOT_NULL(pipe_evt_queue);
     printf("Creating pipe\n");
     hcd_pipe_config_t pipe_config = {
         .callback = pipe_callback,
@@ -236,7 +244,7 @@ hcd_pipe_handle_t test_hcd_pipe_alloc(hcd_port_handle_t port_hdl, const usb_ep_d
     };
     hcd_pipe_handle_t pipe_hdl;
     TEST_ASSERT_EQUAL(ESP_OK, hcd_pipe_alloc(port_hdl, &pipe_config, &pipe_hdl));
-    TEST_ASSERT_NOT_EQUAL(NULL, pipe_hdl);
+    TEST_ASSERT_NOT_NULL(pipe_hdl);
     return pipe_hdl;
 }
 
@@ -244,7 +252,7 @@ void test_hcd_pipe_free(hcd_pipe_handle_t pipe_hdl)
 {
     //Get the pipe's event queue from its context variable
     QueueHandle_t pipe_evt_queue = (QueueHandle_t)hcd_pipe_get_context(pipe_hdl);
-    TEST_ASSERT_NOT_EQUAL(NULL, pipe_evt_queue);
+    TEST_ASSERT_NOT_NULL(pipe_evt_queue);
     //Free the pipe and queue
     TEST_ASSERT_EQUAL(ESP_OK, hcd_pipe_free(pipe_hdl));
     vQueueDelete(pipe_evt_queue);
@@ -255,8 +263,8 @@ urb_t *test_hcd_alloc_urb(int num_isoc_packets, size_t data_buffer_size)
     //Allocate a URB and data buffer
     urb_t *urb = heap_caps_calloc(1, sizeof(urb_t) + (num_isoc_packets * sizeof(usb_isoc_packet_desc_t)), MALLOC_CAP_DEFAULT);
     uint8_t *data_buffer = heap_caps_malloc(data_buffer_size, MALLOC_CAP_DMA);
-    TEST_ASSERT_NOT_EQUAL(NULL, urb);
-    TEST_ASSERT_NOT_EQUAL(NULL, data_buffer);
+    TEST_ASSERT_NOT_NULL(urb);
+    TEST_ASSERT_NOT_NULL(data_buffer);
     //Initialize URB and underlying transfer structure. Need to cast to dummy due to const fields
     usb_transfer_dummy_t *transfer_dummy = (usb_transfer_dummy_t *)&urb->transfer;
     transfer_dummy->data_buffer = data_buffer;
@@ -284,7 +292,7 @@ uint8_t test_hcd_enum_device(hcd_pipe_handle_t default_pipe)
     TEST_ASSERT_EQUAL(ESP_OK, hcd_urb_enqueue(default_pipe, urb));
     test_hcd_expect_pipe_event(default_pipe, HCD_PIPE_EVENT_URB_DONE);
     TEST_ASSERT_EQUAL(urb, hcd_urb_dequeue(default_pipe));
-    TEST_ASSERT_EQUAL(USB_TRANSFER_STATUS_COMPLETED, urb->transfer.status);
+    TEST_ASSERT_EQUAL_MESSAGE(USB_TRANSFER_STATUS_COMPLETED, urb->transfer.status, "Transfer NOT completed");
 
     //Update the MPS of the default pipe
     usb_device_desc_t *device_desc = (usb_device_desc_t *)(urb->transfer.data_buffer + sizeof(usb_setup_packet_t));
@@ -296,7 +304,7 @@ uint8_t test_hcd_enum_device(hcd_pipe_handle_t default_pipe)
     TEST_ASSERT_EQUAL(ESP_OK, hcd_urb_enqueue(default_pipe, urb));
     test_hcd_expect_pipe_event(default_pipe, HCD_PIPE_EVENT_URB_DONE);
     TEST_ASSERT_EQUAL(urb, hcd_urb_dequeue(default_pipe));
-    TEST_ASSERT_EQUAL(USB_TRANSFER_STATUS_COMPLETED, urb->transfer.status);
+    TEST_ASSERT_EQUAL_MESSAGE(USB_TRANSFER_STATUS_COMPLETED, urb->transfer.status, "Transfer NOT completed");
 
     //Update address of default pipe
     TEST_ASSERT_EQUAL(ESP_OK, hcd_pipe_update_dev_addr(default_pipe, ENUM_ADDR));
@@ -307,7 +315,7 @@ uint8_t test_hcd_enum_device(hcd_pipe_handle_t default_pipe)
     TEST_ASSERT_EQUAL(ESP_OK, hcd_urb_enqueue(default_pipe, urb));
     test_hcd_expect_pipe_event(default_pipe, HCD_PIPE_EVENT_URB_DONE);
     TEST_ASSERT_EQUAL(urb, hcd_urb_dequeue(default_pipe));
-    TEST_ASSERT_EQUAL(USB_TRANSFER_STATUS_COMPLETED, urb->transfer.status);
+    TEST_ASSERT_EQUAL_MESSAGE(USB_TRANSFER_STATUS_COMPLETED, urb->transfer.status, "Transfer NOT completed");
 
     //Free URB
     test_hcd_free_urb(urb);

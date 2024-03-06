@@ -32,6 +32,7 @@ typedef struct {
     char *data;         /*!< The HTTP data received from the server */
     int len;            /*!< The HTTP data len received from the server */
     char *raw_data;     /*!< The HTTP data after decoding */
+    char *orig_raw_data;/*!< The Original pointer to HTTP data after decoding */
     int raw_len;        /*!< The HTTP data len after decoding */
     char *output_ptr;   /*!< The destination address of the data to be copied to after decoding */
 } esp_http_buffer_t;
@@ -74,6 +75,7 @@ typedef enum {
     HTTP_STATE_REQ_COMPLETE_HEADER,
     HTTP_STATE_REQ_COMPLETE_DATA,
     HTTP_STATE_RES_COMPLETE_HEADER,
+    HTTP_STATE_RES_ON_DATA_START,
     HTTP_STATE_RES_COMPLETE_DATA,
     HTTP_STATE_CLOSE
 } esp_http_state_t;
@@ -115,6 +117,7 @@ struct esp_http_client {
     bool                        is_async;
     esp_transport_keep_alive_t  keep_alive_cfg;
     struct ifreq                *if_name;
+    unsigned                    cache_data_in_fetch_hdr: 1;
 };
 
 typedef struct esp_http_client esp_http_client_t;
@@ -217,7 +220,6 @@ static int http_on_header_event(esp_http_client_handle_t client)
 static int http_on_header_field(http_parser *parser, const char *at, size_t length)
 {
     esp_http_client_t *client = parser->data;
-    http_on_header_event(client);
     http_utils_append_string(&client->current_header_key, at, length);
 
     return 0;
@@ -238,6 +240,7 @@ static int http_on_header_value(http_parser *parser, const char *at, size_t leng
         http_utils_append_string(&client->auth_header, at, length);
     }
     http_utils_append_string(&client->current_header_value, at, length);
+    http_on_header_event(client);
     return 0;
 }
 
@@ -265,10 +268,24 @@ static int http_on_body(http_parser *parser, const char *at, size_t length)
 {
     esp_http_client_t *client = parser->data;
     ESP_LOGD(TAG, "http_on_body %d", length);
-    client->response->buffer->raw_data = (char *)at;
+
     if (client->response->buffer->output_ptr) {
         memcpy(client->response->buffer->output_ptr, (char *)at, length);
         client->response->buffer->output_ptr += length;
+    } else {
+        /* Do not cache body when http_on_body is called from esp_http_client_perform */
+        if (client->state < HTTP_STATE_RES_ON_DATA_START && client->cache_data_in_fetch_hdr) {
+            ESP_LOGI(TAG, "Body received in fetch header state, %p, %d", at, length);
+            esp_http_buffer_t *res_buffer = client->response->buffer;
+            assert(res_buffer->orig_raw_data == res_buffer->raw_data);
+            res_buffer->orig_raw_data = (char *)realloc(res_buffer->orig_raw_data, res_buffer->raw_len + length);
+            if (!res_buffer->orig_raw_data) {
+                ESP_LOGE(TAG, "Failed to allocate memory for storing decoded data");
+                return -1;
+            }
+            memcpy(res_buffer->orig_raw_data + res_buffer->raw_len, at, length);
+            res_buffer->raw_data = res_buffer->orig_raw_data;
+        }
     }
 
     client->response->data_process += length;
@@ -503,6 +520,16 @@ static esp_err_t esp_http_client_prepare(esp_http_client_handle_t client)
     client->process_again = 0;
     client->response->data_process = 0;
     client->first_line_prepared = false;
+    /**
+     * Clear location field before making a new HTTP request. Location
+     * field should not be cleared in http_on_header* callbacks because
+     * callbacks can be invoked multiple times for same header, and
+     * hence can lead to data corruption.
+     */
+    if (client->location != NULL) {
+        free(client->location);
+        client->location = NULL;
+    }
     http_parser_init(client->parser, HTTP_RESPONSE);
     if (client->connection_info.username) {
         char *auth_response = NULL;
@@ -542,6 +569,25 @@ static char *_get_host_header(char *host, int port)
     return host_name;
 }
 
+static bool init_common_tcp_transport(esp_http_client_handle_t client, const esp_http_client_config_t *config, esp_transport_handle_t transport)
+{
+    if (config->keep_alive_enable == true) {
+        client->keep_alive_cfg.keep_alive_enable = true;
+        client->keep_alive_cfg.keep_alive_idle = (config->keep_alive_idle == 0) ? DEFAULT_KEEP_ALIVE_IDLE : config->keep_alive_idle;
+        client->keep_alive_cfg.keep_alive_interval = (config->keep_alive_interval == 0) ? DEFAULT_KEEP_ALIVE_INTERVAL : config->keep_alive_interval;
+        client->keep_alive_cfg.keep_alive_count =  (config->keep_alive_count == 0) ? DEFAULT_KEEP_ALIVE_COUNT : config->keep_alive_count;
+        esp_transport_tcp_set_keep_alive(transport, &client->keep_alive_cfg);
+    }
+
+    if (config->if_name) {
+        client->if_name = calloc(1, sizeof(struct ifreq));
+        HTTP_MEM_CHECK(TAG, client->if_name, return false);
+        memcpy(client->if_name, config->if_name, sizeof(struct ifreq));
+        esp_transport_tcp_set_interface_name(transport, client->if_name);
+    }
+    return true;
+}
+
 esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config)
 {
 
@@ -579,19 +625,9 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         goto error;
     }
 
-    if (config->keep_alive_enable == true) {
-        client->keep_alive_cfg.keep_alive_enable = true;
-        client->keep_alive_cfg.keep_alive_idle = (config->keep_alive_idle == 0) ? DEFAULT_KEEP_ALIVE_IDLE : config->keep_alive_idle;
-        client->keep_alive_cfg.keep_alive_interval = (config->keep_alive_interval == 0) ? DEFAULT_KEEP_ALIVE_INTERVAL : config->keep_alive_interval;
-        client->keep_alive_cfg.keep_alive_count =  (config->keep_alive_count == 0) ? DEFAULT_KEEP_ALIVE_COUNT : config->keep_alive_count;
-        esp_transport_tcp_set_keep_alive(tcp, &client->keep_alive_cfg);
-    }
-
-    if (config->if_name) {
-        client->if_name = calloc(1, sizeof(struct ifreq) + 1);
-        HTTP_MEM_CHECK(TAG, client->if_name, goto error);
-        memcpy(client->if_name, config->if_name, sizeof(struct ifreq));
-        esp_transport_tcp_set_interface_name(tcp, client->if_name);
+    if (!init_common_tcp_transport(client, config, tcp)) {
+        ESP_LOGE(TAG, "Failed to set TCP config");
+        goto error;
     }
 
 #ifdef CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS
@@ -604,6 +640,11 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
 
     if (!_success) {
         ESP_LOGE(TAG, "Error initialize SSL Transport");
+        goto error;
+    }
+
+    if (!init_common_tcp_transport(client, config, ssl)) {
+        ESP_LOGE(TAG, "Failed to set SSL config");
         goto error;
     }
 
@@ -665,6 +706,10 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
     const char *user_agent = config->user_agent == NULL ? DEFAULT_HTTP_USER_AGENT : config->user_agent;
 
     if (config->host != NULL && config->path != NULL) {
+        if (client->connection_info.host == NULL) {
+            ESP_LOGE(TAG, "invalid host");
+            goto error;
+        }
         host_name = _get_host_header(client->connection_info.host, client->connection_info.port);
         if (host_name == NULL) {
             ESP_LOGE(TAG, "Failed to allocate memory for host header");
@@ -682,6 +727,10 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
     } else if (config->url != NULL) {
         if (esp_http_client_set_url(client, config->url) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to set URL");
+            goto error;
+        }
+        if (client->connection_info.host == NULL) {
+            ESP_LOGE(TAG, "invalid host");
             goto error;
         }
         host_name = _get_host_header(client->connection_info.host, client->connection_info.port);
@@ -705,6 +754,11 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
         goto error;
     }
 
+    /* As default behavior, cache data received in fetch header state. This will be
+     * used in esp_http_client_read API only. For esp_http_perform we shall disable
+     * this as data will be processed by event handler */
+    client->cache_data_in_fetch_hdr = 1;
+
     client->parser_settings->on_message_begin = http_on_message_begin;
     client->parser_settings->on_url = http_on_url;
     client->parser_settings->on_status = http_on_status;
@@ -723,6 +777,17 @@ esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *co
 error:
     esp_http_client_cleanup(client);
     return NULL;
+}
+
+static void esp_http_client_cached_buf_cleanup(esp_http_buffer_t *res_buffer)
+{
+    /* Free cached data if any, that was received during fetch header stage */
+    if (res_buffer && res_buffer->orig_raw_data) {
+        free(res_buffer->orig_raw_data);
+        res_buffer->orig_raw_data = NULL;
+        res_buffer->raw_data = NULL;
+        res_buffer->raw_len = 0;
+    }
 }
 
 esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client)
@@ -746,6 +811,7 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t client)
         http_header_destroy(client->response->headers);
         if (client->response->buffer) {
             free(client->response->buffer->data);
+            esp_http_client_cached_buf_cleanup(client->response->buffer);
         }
         free(client->response->buffer);
         free(client->response);
@@ -789,7 +855,9 @@ static esp_err_t esp_http_check_response(esp_http_client_handle_t client)
     switch (client->response->status_code) {
         case HttpStatus_MovedPermanently:
         case HttpStatus_Found:
+        case HttpStatus_SeeOther:
         case HttpStatus_TemporaryRedirect:
+        case HttpStatus_PermanentRedirect:
             esp_http_client_set_redirection(client);
             client->redirect_counter ++;
             client->process_again = 1;
@@ -839,6 +907,8 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
             free(old_host);
             return ESP_ERR_NO_MEM;
         }
+        /* Free cached data if any, as we are closing this connection */
+        esp_http_client_cached_buf_cleanup(client->response->buffer);
         esp_http_client_close(client);
     }
 
@@ -863,6 +933,8 @@ esp_err_t esp_http_client_set_url(esp_http_client_handle_t client, const char *u
     }
 
     if (old_port != client->connection_info.port) {
+        /* Free cached data if any, as we are closing this connection */
+        esp_http_client_cached_buf_cleanup(client->response->buffer);
         esp_http_client_close(client);
     }
 
@@ -932,7 +1004,7 @@ esp_err_t esp_http_client_set_timeout_ms(esp_http_client_handle_t client, int ti
 
 static int esp_http_client_get_data(esp_http_client_handle_t client)
 {
-    if (client->state < HTTP_STATE_RES_COMPLETE_HEADER) {
+    if (client->state < HTTP_STATE_RES_ON_DATA_START) {
         return ESP_FAIL;
     }
 
@@ -981,6 +1053,9 @@ int esp_http_client_read(esp_http_client_handle_t client, char *buffer, int len)
         res_buffer->raw_len -= remain_len;
         res_buffer->raw_data += remain_len;
         ridx = remain_len;
+        if (res_buffer->raw_len == 0) {
+            esp_http_client_cached_buf_cleanup(res_buffer);
+        }
     }
     int need_read = len - ridx;
     bool is_data_remain = true;
@@ -1081,10 +1156,16 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                 }
                 /* falls through */
             case HTTP_STATE_REQ_COMPLETE_DATA:
+                /* Disable caching response body, as data should
+                 * be handled by application event handler */
+                client->cache_data_in_fetch_hdr = 0;
                 if (esp_http_client_fetch_headers(client) < 0) {
                     if (client->is_async && errno == EAGAIN) {
                         return ESP_ERR_HTTP_EAGAIN;
                     }
+                    /* Enable caching after error condition because next
+                     * request could be performed using native APIs */
+                    client->cache_data_in_fetch_hdr = 1;
                     if (esp_transport_get_errno(client->transport) == ENOTCONN) {
                         ESP_LOGW(TAG, "Close connection due to FIN received");
                         esp_http_client_close(client);
@@ -1095,7 +1176,10 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t client)
                     return ESP_ERR_HTTP_FETCH_HEADER;
                 }
                 /* falls through */
-            case HTTP_STATE_RES_COMPLETE_HEADER:
+            case HTTP_STATE_RES_ON_DATA_START:
+                /* Enable caching after fetch headers state because next
+                 * request could be performed using native APIs */
+                client->cache_data_in_fetch_hdr = 1;
                 if ((err = esp_http_check_response(client)) != ESP_OK) {
                     ESP_LOGE(TAG, "Error response");
                     http_dispatch_event(client, HTTP_EVENT_ERROR, esp_transport_get_error_handle(client->transport), 0);
@@ -1156,6 +1240,7 @@ int esp_http_client_fetch_headers(esp_http_client_handle_t client)
         }
         http_parser_execute(client->parser, client->parser_settings, buffer->data, buffer->len);
     }
+    client->state = HTTP_STATE_RES_ON_DATA_START;
     ESP_LOGD(TAG, "content_length = %d", client->response->content_length);
     if (client->response->content_length <= 0) {
         client->response->is_chunked = true;
@@ -1449,7 +1534,7 @@ void esp_http_client_add_auth(esp_http_client_handle_t client)
     if (client == NULL) {
         return;
     }
-    if (client->state != HTTP_STATE_RES_COMPLETE_HEADER) {
+    if (client->state != HTTP_STATE_RES_ON_DATA_START) {
         return;
     }
     if (client->redirect_counter >= client->max_authorization_retries) {

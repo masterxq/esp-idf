@@ -221,6 +221,23 @@ static inline void i2s_ll_tx_set_bck_div_num(i2s_dev_t *hw, uint32_t val)
 }
 
 /**
+ * @brief Set I2S tx raw clock division
+ *
+ * @param hw Peripheral I2S hardware instance address.
+ * @param x  div x
+ * @param y  div y
+ * @param z  div z
+ * @param yn1 yn1
+ */
+static inline void i2s_ll_tx_set_raw_clk_div(i2s_dev_t *hw, uint32_t x, uint32_t y, uint32_t z, uint32_t yn1)
+{
+    hw->tx_clkm_div_conf.tx_clkm_div_x = x;
+    hw->tx_clkm_div_conf.tx_clkm_div_y = y;
+    hw->tx_clkm_div_conf.tx_clkm_div_z = z;
+    hw->tx_clkm_div_conf.tx_clkm_div_yn1 = yn1;
+}
+
+/**
  * @brief Configure I2S TX clock devider
  *
  * @param hw Peripheral I2S hardware instance address.
@@ -294,8 +311,8 @@ static inline void i2s_ll_rx_set_clk(i2s_dev_t *hw, i2s_ll_mclk_div_t *set)
  */
 static inline void i2s_ll_tx_start(i2s_dev_t *hw)
 {
-    hw->tx_conf.tx_update = 0;
     hw->tx_conf.tx_update = 1;
+    while (hw->tx_conf.tx_update);
     hw->tx_conf.tx_start = 1;
 }
 
@@ -306,8 +323,8 @@ static inline void i2s_ll_tx_start(i2s_dev_t *hw)
  */
 static inline void i2s_ll_rx_start(i2s_dev_t *hw)
 {
-    hw->rx_conf.rx_update = 0;
     hw->rx_conf.rx_update = 1;
+    while (hw->rx_conf.rx_update);
     hw->rx_conf.rx_start = 1;
 }
 
@@ -663,11 +680,11 @@ static inline void i2s_ll_tx_enable_pdm_hp_filter(i2s_dev_t *hw, bool enable)
  * @brief Enable I2S TX PDM sigma-delta codec
  *
  * @param hw Peripheral I2S hardware instance address.
- * @param dither I2S TX PDM sigmadelta dither value
+ * @param enable whether enable sd dac one line mode
  */
 static inline void i2s_ll_tx_enable_pdm_sd_codec(i2s_dev_t *hw, bool enable)
 {
-    hw->tx_pcm2pdm_conf.tx_dac_2out_en = enable;
+    hw->tx_pcm2pdm_conf.tx_dac_2out_en = !enable;
     hw->tx_pcm2pdm_conf.tx_dac_mode_en = enable;
 }
 

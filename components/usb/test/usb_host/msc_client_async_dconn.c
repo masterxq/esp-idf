@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,12 +12,11 @@
 #include "freertos/task.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "test_usb_mock_classes.h"
+#include "test_usb_mock_msc.h"
 #include "test_usb_common.h"
 #include "msc_client.h"
 #include "usb/usb_host.h"
 #include "unity.h"
-#include "test_utils.h"
 
 /*
 Implementation of an asynchronous MSC client used for USB Host disconnection test.
@@ -29,12 +28,14 @@ Implementation of an asynchronous MSC client used for USB Host disconnection tes
     - Trigger a single MSC SCSI transfer
         - Split the data stage into multiple transfers (so that the endpoint multiple queued up transfers)
         - Cause a disconnection mid-way through the data stage
-    - All of the transfers should be automatically deqeueud
+    - All of the transfers should be automatically dequeued
     - Then a USB_HOST_CLIENT_EVENT_DEV_GONE event should occur afterwards
     - Free transfer objects
     - Close device
     - Deregister MSC client
 */
+
+#define TEST_DCONN_ITERATIONS   3
 
 typedef enum {
     TEST_STAGE_WAIT_CONN,
@@ -60,7 +61,7 @@ static void msc_reset_cbw_transfer_cb(usb_transfer_t *transfer)
 {
     msc_client_obj_t *msc_obj = (msc_client_obj_t *)transfer->context;
     //We expect the reset and CBW transfers to complete with no issues
-    TEST_ASSERT_EQUAL(USB_TRANSFER_STATUS_COMPLETED, transfer->status);
+    TEST_ASSERT_EQUAL_MESSAGE(USB_TRANSFER_STATUS_COMPLETED, transfer->status, "Transfer NOT completed");
     TEST_ASSERT_EQUAL(transfer->num_bytes, transfer->actual_num_bytes);
     switch (msc_obj->cur_stage) {
         case TEST_STAGE_MSC_RESET:
@@ -155,6 +156,7 @@ void msc_client_async_dconn_task(void *arg)
 
     bool exit_loop = false;
     bool skip_event_handling = false;
+    int dconn_iter = 0;
     while (!exit_loop) {
         if (!skip_event_handling) {
             TEST_ASSERT_EQUAL(ESP_OK, usb_host_client_handle_events(msc_obj.client_hdl, portMAX_DELAY));
@@ -166,6 +168,10 @@ void msc_client_async_dconn_task(void *arg)
         msc_obj.cur_stage = msc_obj.next_stage;
 
         switch (msc_obj.cur_stage) {
+            case TEST_STAGE_WAIT_CONN: {
+                //Nothing to do while waiting for connection
+                break;
+            }
             case TEST_STAGE_DEV_OPEN: {
                 ESP_LOGD(MSC_CLIENT_TAG, "Open");
                 //Open the device
@@ -219,7 +225,7 @@ void msc_client_async_dconn_task(void *arg)
                     TEST_ASSERT_EQUAL(ESP_OK, usb_host_transfer_submit(xfer_in[i]));
                 }
                 //Trigger a disconnect
-                test_usb_force_conn_state(false, 0);
+                test_usb_set_phy_state(false, 0);
                 //Next stage set from transfer callback
                 break;
             }
@@ -227,7 +233,15 @@ void msc_client_async_dconn_task(void *arg)
                 ESP_LOGD(MSC_CLIENT_TAG, "Close");
                 TEST_ASSERT_EQUAL(ESP_OK, usb_host_interface_release(msc_obj.client_hdl, msc_obj.dev_hdl, MOCK_MSC_SCSI_INTF_NUMBER));
                 TEST_ASSERT_EQUAL(ESP_OK, usb_host_device_close(msc_obj.client_hdl, msc_obj.dev_hdl));
-                exit_loop = true;
+                dconn_iter++;
+                if (dconn_iter < TEST_DCONN_ITERATIONS) {
+                    //Start the next test iteration by going back to TEST_STAGE_WAIT_CONN and reenabling connections
+                    msc_obj.next_stage = TEST_STAGE_WAIT_CONN;
+                    skip_event_handling = true; //Need to execute TEST_STAGE_WAIT_CONN
+                    test_usb_set_phy_state(true, 0);
+                } else {
+                    exit_loop = true;
+                }
                 break;
             }
             default:

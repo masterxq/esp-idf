@@ -1,16 +1,8 @@
-// Copyright 2015-2018 Espressif Systems (Shanghai) PTE LTD
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -289,16 +281,6 @@ static void * wifi_thread_semphr_get_wrapper(void)
     return (void*)sem;
 }
 
-static int32_t IRAM_ATTR semphr_take_from_isr_wrapper(void *semphr, void *hptw)
-{
-    return (int32_t)xSemaphoreTakeFromISR(semphr, hptw);
-}
-
-static int32_t IRAM_ATTR semphr_give_from_isr_wrapper(void *semphr, void *hptw)
-{
-    return (int32_t)xSemaphoreGiveFromISR(semphr, hptw);
-}
-
 static int32_t semphr_take_wrapper(void *semphr, uint32_t block_time_tick)
 {
     if (block_time_tick == OSI_FUNCS_TIME_BLOCKING) {
@@ -312,6 +294,82 @@ static int32_t semphr_give_wrapper(void *semphr)
 {
     return (int32_t)xSemaphoreGive(semphr);
 }
+
+
+static void *internal_semphr_create_wrapper(uint32_t max, uint32_t init)
+{
+    wifi_static_queue_t *semphr = heap_caps_calloc(1, sizeof(wifi_static_queue_t), MALLOC_CAP_8BIT|MALLOC_CAP_INTERNAL);
+    if (!semphr) {
+        return NULL;
+    }
+
+#ifdef CONFIG_SPIRAM_USE_MALLOC
+    semphr->storage = heap_caps_calloc(1, sizeof(StaticSemaphore_t), MALLOC_CAP_8BIT|MALLOC_CAP_INTERNAL);
+    if (!semphr->storage) {
+        goto _error;
+    }
+
+    semphr->handle = xSemaphoreCreateCountingStatic(max, init, semphr->storage);
+    if (!semphr->handle) {
+        goto _error;
+    }
+    return (void *)semphr;
+
+_error:
+    if (semphr) {
+        if (semphr->storage) {
+            free(semphr->storage);
+        }
+
+        free(semphr);
+    }
+    return NULL;
+#else
+    semphr->handle = xSemaphoreCreateCounting(max, init);
+    return (void *)semphr;
+#endif
+}
+
+void internal_semphr_delete_wrapper(void *semphr)
+{
+    wifi_static_queue_t *semphr_item = (wifi_static_queue_t *)semphr;
+    if (semphr_item) {
+        if (semphr_item->handle) {
+            vSemaphoreDelete(semphr_item->handle);
+        }
+#ifdef CONFIG_SPIRAM_USE_MALLOC
+        if (semphr_item->storage) {
+            free(semphr_item->storage);
+        }
+#endif
+        free(semphr_item);
+    }
+}
+
+static int32_t IRAM_ATTR internal_semphr_take_from_isr_wrapper(void *semphr, void *hptw)
+{
+    return (int32_t)xSemaphoreTakeFromISR(((wifi_static_queue_t *)semphr)->handle, hptw);
+}
+
+static int32_t IRAM_ATTR internal_semphr_give_from_isr_wrapper(void *semphr, void *hptw)
+{
+    return (int32_t)xSemaphoreGiveFromISR(((wifi_static_queue_t *)semphr)->handle, hptw);
+}
+
+static int32_t internal_semphr_take_wrapper(void *semphr, uint32_t block_time_tick)
+{
+    if (block_time_tick == OSI_FUNCS_TIME_BLOCKING) {
+        return (int32_t)xSemaphoreTake(((wifi_static_queue_t *)semphr)->handle, portMAX_DELAY);
+    } else {
+        return (int32_t)xSemaphoreTake(((wifi_static_queue_t *)semphr)->handle, block_time_tick);
+    }
+}
+
+static int32_t internal_semphr_give_wrapper(void *semphr)
+{
+    return (int32_t)xSemaphoreGive(((wifi_static_queue_t *)semphr)->handle);
+}
+
 
 static void * recursive_mutex_create_wrapper(void)
 {
@@ -455,8 +513,7 @@ static void IRAM_ATTR timer_arm_us_wrapper(void *ptimer, uint32_t us, bool repea
 
 static void wifi_reset_mac_wrapper(void)
 {
-    DPORT_SET_PERI_REG_MASK(DPORT_CORE_RST_EN_REG, DPORT_MAC_RST);
-    DPORT_CLEAR_PERI_REG_MASK(DPORT_CORE_RST_EN_REG, DPORT_MAC_RST);
+    periph_module_reset(PERIPH_WIFI_MODULE);
 }
 
 static void wifi_clock_enable_wrapper(void)
@@ -662,6 +719,18 @@ int32_t IRAM_ATTR coex_is_in_isr_wrapper(void)
     return !xPortCanYield();
 }
 
+static void esp_phy_enable_wrapper(void)
+{
+    esp_phy_enable();
+    phy_wifi_enable_set(1);
+}
+
+static void esp_phy_disable_wrapper(void)
+{
+    phy_wifi_enable_set(0);
+    esp_phy_disable();
+}
+
 wifi_osi_funcs_t g_wifi_osi_funcs = {
     ._version = ESP_WIFI_OS_ADAPTER_VERSION,
     ._env_is_chip = env_is_chip_wrapper,
@@ -715,8 +784,8 @@ wifi_osi_funcs_t g_wifi_osi_funcs = {
     ._dport_access_stall_other_cpu_end_wrap = s_esp_dport_access_stall_other_cpu_end,
     ._wifi_apb80m_request = wifi_apb80m_request_wrapper,
     ._wifi_apb80m_release = wifi_apb80m_release_wrapper,
-    ._phy_disable = esp_phy_disable,
-    ._phy_enable = esp_phy_enable,
+    ._phy_disable = esp_phy_disable_wrapper,
+    ._phy_enable = esp_phy_enable_wrapper,
     ._phy_common_clock_enable = esp_phy_common_clock_enable,
     ._phy_common_clock_disable = esp_phy_common_clock_disable,
     ._phy_update_country_info = esp_phy_update_country_info,
@@ -789,12 +858,12 @@ coex_adapter_funcs_t g_coex_adapter_funcs = {
     ._int_disable = wifi_int_disable_wrapper,
     ._int_enable = wifi_int_restore_wrapper,
     ._task_yield_from_isr = task_yield_from_isr_wrapper,
-    ._semphr_create = semphr_create_wrapper,
-    ._semphr_delete = semphr_delete_wrapper,
-    ._semphr_take_from_isr = semphr_take_from_isr_wrapper,
-    ._semphr_give_from_isr = semphr_give_from_isr_wrapper,
-    ._semphr_take = semphr_take_wrapper,
-    ._semphr_give = semphr_give_wrapper,
+    ._semphr_create = internal_semphr_create_wrapper,
+    ._semphr_delete = internal_semphr_delete_wrapper,
+    ._semphr_take_from_isr = internal_semphr_take_from_isr_wrapper,
+    ._semphr_give_from_isr = internal_semphr_give_from_isr_wrapper,
+    ._semphr_take = internal_semphr_take_wrapper,
+    ._semphr_give = internal_semphr_give_wrapper,
     ._is_in_isr = coex_is_in_isr_wrapper,
     ._malloc_internal =  malloc_internal_wrapper,
     ._free = free,

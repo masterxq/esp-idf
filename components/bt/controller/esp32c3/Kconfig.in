@@ -4,11 +4,13 @@ config BT_CTRL_MODE_EFF
 
 config BT_CTRL_BLE_MAX_ACT
     int "BLE Max Instances"
-    default 10
+    default 6
     range 1 10
     help
         BLE maximum activities of bluetooth controller，both of connections,
-        scan , sync and adv(periodic adv, multi-adv).
+        scan , sync and adv(periodic adv, multi-adv). Each instance needs to
+        consume 828 bytes, you can save RAM by modifying the instance value
+        according to actual needs.
 
 config BT_CTRL_BLE_MAX_ACT_EFF
     int
@@ -24,8 +26,24 @@ config BT_CTRL_BLE_STATIC_ACL_TX_BUF_NB
         (alloate when controller initialise, never free until controller de-initialise)
         another is dynamically allocating (allocate before TX and free after TX).
 
+choice BT_CTRL_PINNED_TO_CORE_CHOICE
+    prompt "The cpu core which bluetooth controller run"
+    depends on !FREERTOS_UNICORE
+    help
+        Specify the cpu core to run bluetooth controller.
+        Can not specify no-affinity.
+
+    config BT_CTRL_PINNED_TO_CORE_0
+        bool "Core 0 (PRO CPU)"
+    config BT_CTRL_PINNED_TO_CORE_1
+        bool "Core 1 (APP CPU)"
+        depends on !FREERTOS_UNICORE
+endchoice
+
 config BT_CTRL_PINNED_TO_CORE
     int
+    default 0 if BT_CTRL_PINNED_TO_CORE_0
+    default 1 if BT_CTRL_PINNED_TO_CORE_1
     default 0
 
 choice BT_CTRL_HCI_MODE_CHOICE
@@ -36,7 +54,7 @@ choice BT_CTRL_HCI_MODE_CHOICE
     config BT_CTRL_HCI_MODE_VHCI
         bool "VHCI"
         help
-            Normal option. Mostly, choose this VHCI when bluetooth host run on ESP32C3, too.
+            Normal option. Mostly, choose this VHCI when bluetooth host run on ESP32S3 or ESP32C3.
 
     config BT_CTRL_HCI_MODE_UART_H4
         bool "UART(H4)"
@@ -60,11 +78,32 @@ config BT_CTRL_ADV_DUP_FILT_MAX
     help
         The maxinum number of suplicate scan filter
 
-config BT_CTRL_HW_CCA
-    bool "HW CCA check enable"
-    default n
+choice BT_BLE_CCA_MODE
+    prompt "BLE CCA mode"
+    default BT_BLE_CCA_MODE_NONE
     help
-        It enables HW CCA feature in controller
+        Define BT BLE CCA mode
+
+    config BT_BLE_CCA_MODE_NONE
+        bool "NONE"
+    config BT_BLE_CCA_MODE_HW
+        bool "Hardware"
+    config BT_BLE_CCA_MODE_SW
+        bool "Software"
+endchoice
+
+config BT_BLE_CCA_MODE
+    int
+    default 0 if BT_BLE_CCA_MODE_NONE
+    default 1 if BT_BLE_CCA_MODE_HW
+    default 2 if BT_BLE_CCA_MODE_SW
+
+config BT_CTRL_HW_CCA_VAL
+    int "CCA threshold value"
+    range 20 100
+    default 20
+    help
+        It is the threshold value of HW CCA, if the value is 30, it means CCA threshold is -30 dBm.
 
 config BT_CTRL_HW_CCA_EFF
     int
@@ -127,12 +166,10 @@ config BT_CTRL_RX_ANTENNA_INDEX_EFF
 
 choice BT_CTRL_DFT_TX_POWER_LEVEL
     prompt "BLE default Tx power level"
-    default BT_CTRL_DFT_TX_POWER_LEVEL_P3
+    default BT_CTRL_DFT_TX_POWER_LEVEL_P9
     help
         Specify default Tx power level
 
-    config BT_CTRL_DFT_TX_POWER_LEVEL_N27
-        bool "-27dBm"
     config BT_CTRL_DFT_TX_POWER_LEVEL_N24
         bool "-24dBm"
     config BT_CTRL_DFT_TX_POWER_LEVEL_N21
@@ -163,26 +200,28 @@ choice BT_CTRL_DFT_TX_POWER_LEVEL
         bool "+15dBm"
     config BT_CTRL_DFT_TX_POWER_LEVEL_P18
         bool "+18dBm"
+    config BT_CTRL_DFT_TX_POWER_LEVEL_P21
+        bool "+21dBm"
 endchoice
 
 config BT_CTRL_DFT_TX_POWER_LEVEL_EFF
     int
-    default 0 if BT_CTRL_DFT_TX_POWER_LEVEL_N27
-    default 1 if BT_CTRL_DFT_TX_POWER_LEVEL_N24
-    default 2 if BT_CTRL_DFT_TX_POWER_LEVEL_N21
-    default 3 if BT_CTRL_DFT_TX_POWER_LEVEL_N18
-    default 4 if BT_CTRL_DFT_TX_POWER_LEVEL_N15
-    default 5 if BT_CTRL_DFT_TX_POWER_LEVEL_N12
-    default 6 if BT_CTRL_DFT_TX_POWER_LEVEL_N9
-    default 7 if BT_CTRL_DFT_TX_POWER_LEVEL_N6
-    default 8 if BT_CTRL_DFT_TX_POWER_LEVEL_N3
-    default 9 if BT_CTRL_DFT_TX_POWER_LEVEL_N0
-    default 10 if BT_CTRL_DFT_TX_POWER_LEVEL_P3
-    default 11 if BT_CTRL_DFT_TX_POWER_LEVEL_P6
-    default 12 if BT_CTRL_DFT_TX_POWER_LEVEL_P9
-    default 13 if BT_CTRL_DFT_TX_POWER_LEVEL_P12
-    default 14 if BT_CTRL_DFT_TX_POWER_LEVEL_P15
-    default 15 if BT_CTRL_DFT_TX_POWER_LEVEL_P18
+    default 0 if BT_CTRL_DFT_TX_POWER_LEVEL_N24
+    default 1 if BT_CTRL_DFT_TX_POWER_LEVEL_N21
+    default 2 if BT_CTRL_DFT_TX_POWER_LEVEL_N18
+    default 3 if BT_CTRL_DFT_TX_POWER_LEVEL_N15
+    default 4 if BT_CTRL_DFT_TX_POWER_LEVEL_N12
+    default 5 if BT_CTRL_DFT_TX_POWER_LEVEL_N9
+    default 6 if BT_CTRL_DFT_TX_POWER_LEVEL_N6
+    default 7 if BT_CTRL_DFT_TX_POWER_LEVEL_N3
+    default 8 if BT_CTRL_DFT_TX_POWER_LEVEL_N0
+    default 9 if BT_CTRL_DFT_TX_POWER_LEVEL_P3
+    default 10 if BT_CTRL_DFT_TX_POWER_LEVEL_P6
+    default 11 if BT_CTRL_DFT_TX_POWER_LEVEL_P9
+    default 12 if BT_CTRL_DFT_TX_POWER_LEVEL_P12
+    default 13 if BT_CTRL_DFT_TX_POWER_LEVEL_P15
+    default 14 if BT_CTRL_DFT_TX_POWER_LEVEL_P18
+    default 15 if BT_CTRL_DFT_TX_POWER_LEVEL_P21
     default 0
 
 config BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_SUPP
@@ -240,20 +279,19 @@ choice BT_CTRL_SCAN_DUPL_TYPE
     config BT_CTRL_SCAN_DUPL_TYPE_DEVICE
         bool "Scan Duplicate By Device Address"
         help
-            This way is to use advertiser address filtering. The adv packet of the same address is only
-            allowed to be reported once
+            Advertising packets with the same address, address type, and advertising type are reported once.
 
     config BT_CTRL_SCAN_DUPL_TYPE_DATA
         bool "Scan Duplicate By Advertising Data"
         help
-            This way is to use advertising data filtering. All same advertising data only allow to be reported
-            once even though they are from different devices.
+            Advertising packets with identical advertising data, address type, and advertising type
+            are reported only once, even if they originate from different devices.
 
     config BT_CTRL_SCAN_DUPL_TYPE_DATA_DEVICE
         bool "Scan Duplicate By Device Address And Advertising Data"
         help
-            This way is to use advertising data and device address filtering. All different adv packets with
-            the same address are allowed to be reported.
+            Advertising packets with the same address, advertising data, address type,
+            and advertising type are reported only once.
 endchoice
 
 config BT_CTRL_SCAN_DUPL_TYPE
@@ -272,6 +310,22 @@ config BT_CTRL_SCAN_DUPL_CACHE_SIZE
     help
         Maximum number of devices which can be recorded in scan duplicate filter.
         When the maximum amount of device in the filter is reached, the cache will be refreshed.
+
+config BT_CTRL_DUPL_SCAN_CACHE_REFRESH_PERIOD
+    int "Duplicate scan list refresh period (seconds)"
+    depends on BT_CTRL_BLE_SCAN_DUPL
+    range 0 1000
+    default 0
+    help
+        If the period value is non-zero, the controller will periodically clear the device information
+        stored in the scan duuplicate filter. If it is 0, the scan duuplicate filter will not be cleared
+        until the scanning is disabled. Duplicate advertisements for this period should not be sent to the
+        Host in advertising report events.
+        There are two scenarios where the ADV packet will be repeatedly reported:
+        1. The duplicate scan cache is full, the controller will delete the oldest device information and
+        add new device information.
+        2. When the refresh period is up, the controller will clear all device information and start filtering
+        again.
 
 config BT_CTRL_BLE_MESH_SCAN_DUPL_EN
     bool "Special duplicate scan mechanism for BLE Mesh scan"
@@ -344,12 +398,12 @@ menu "MODEM SLEEP Options"
             bool "Main crystal"
             help
                 Main crystal can be used as low power clock for bluetooth modem sleep. If this option is
-                selected, bluetooth modem sleep can work under Dynamic Frequency Scaling(DFS) enabled, but
-                cannot work when light sleep is enabled. Main crystal has a relatively better performance than
-                other bluetooth low power clock sources.
+                selected, bluetooth modem sleep can work under Dynamic Frequency Scaling(DFS) enabled, and
+                bluetooth can work under light sleep enabled. Main crystal has a relatively better performance
+                than other bluetooth low power clock sources.
         config BT_CTRL_LPCLK_SEL_EXT_32K_XTAL
             bool "External 32kHz crystal"
-            depends on ESP32C3_RTC_CLK_SRC_EXT_CRYS
+            depends on (ESP32C3_RTC_CLK_SRC_EXT_CRYS || ESP32S3_RTC_CLK_SRC_EXT_CRYS)
             help
                 External 32kHz crystal has a nominal frequency of 32.768kHz and provides good frequency
                 stability. If used as Bluetooth low power clock, External 32kHz can support Bluetooth
@@ -357,13 +411,21 @@ menu "MODEM SLEEP Options"
 
         config BT_CTRL_LPCLK_SEL_RTC_SLOW
             bool "Internal 150kHz RC oscillator"
-            depends on ESP32C3_RTC_CLK_SRC_INT_RC
+            depends on (ESP32C3_RTC_CLK_SRC_INT_RC || ESP32S3_RTC_CLK_SRC_INT_RC)
             help
                 Internal 150kHz RC oscillator. The accuracy of this clock is a lot larger than 500ppm which is required
                 in Bluetooth communication, so don't select this option in scenarios such as BLE connection state.
-
-
     endchoice
+
+    config BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP
+        bool "power up main XTAL during light sleep"
+        depends on (BT_CTRL_LPCLK_SEL_MAIN_XTAL || BT_CTRL_LPCLK_SEL_EXT_32K_XTAL) && FREERTOS_USE_TICKLESS_IDLE
+        default n
+        help
+            If this option is selected, the main crystal will power up during light sleep when the low power clock
+            selects an external 32kHz crystal but the external 32kHz crystal does not exist or the low power clock
+            selects the main crystal.
+
 endmenu
 
 config BT_CTRL_SLEEP_MODE_EFF
@@ -397,3 +459,19 @@ config BT_CTRL_CODED_AGC_RECORRECT_EN
     default n
     help
         Enable coded phy AGC recorrect
+
+config BT_CTRL_SCAN_BACKOFF_UPPERLIMITMAX
+    bool "Disable active scan backoff"
+    default n
+    help
+        Disable active scan backoff. The bluetooth spec requires that scanners should run a backoff procedure to
+        minimize collision of scan request PDUs from nultiple scanners. If scan backoff is disabled, in active
+        scanning, scan request PDU will be sent every time when HW receives scannable ADV PDU.
+
+config BT_BLE_ADV_DATA_LENGTH_ZERO_AUX
+    bool "Enable aux packet when ext adv data length is zero"
+    default n
+    help
+        When this option is enabled, auxiliary packets will be present in the events of
+        'Non-Connectable and Non-Scannable' regardless of whether the advertising length is 0.
+        If this option is not enabled, auxiliary packets will only be present when the advertising length is not 0.
